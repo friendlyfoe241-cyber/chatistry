@@ -1,89 +1,98 @@
--- Supabase Schema for Chat Application
+-- Chatice — Supabase Schema
+-- Run this on a fresh project, then disable email confirmation in Auth settings.
 
--- 1. Users table (extends auth.users)
-create table public.users (
-  id uuid references auth.users not null primary key,
-  username text unique not null,
-  is_online boolean default false,
-  is_typing_to uuid references public.users(id),
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+-- 1. Users table
+CREATE TABLE public.users (
+  id uuid REFERENCES auth.users NOT NULL PRIMARY KEY,
+  username text UNIQUE NOT NULL,
+  is_online boolean DEFAULT false,
+  created_at timestamptz DEFAULT timezone('utc', now()) NOT NULL,
+  updated_at timestamptz DEFAULT timezone('utc', now()) NOT NULL
 );
 
 -- 2. Conversations table
-create table public.conversations (
-  id text primary key, -- e.g., sorted user IDs joined by '_'
-  participants uuid[] not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE TABLE public.conversations (
+  id text PRIMARY KEY,
+  participants uuid[] NOT NULL,
+  created_at timestamptz DEFAULT timezone('utc', now()) NOT NULL,
+  updated_at timestamptz DEFAULT timezone('utc', now()) NOT NULL
 );
 
 -- 3. Messages table
-create table public.messages (
-  id uuid default gen_random_uuid() primary key,
-  conversation_id text references public.conversations(id) on delete cascade not null,
-  sender_id uuid references public.users(id) on delete cascade not null,
-  content text not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE TABLE public.messages (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  conversation_id text REFERENCES public.conversations(id) ON DELETE CASCADE NOT NULL,
+  sender_id uuid REFERENCES public.users(id) ON DELETE CASCADE NOT NULL,
+  content text NOT NULL,
+  created_at timestamptz DEFAULT timezone('utc', now()) NOT NULL
 );
 
--- Turn on RLS
-alter table public.users enable row level security;
-alter table public.conversations enable row level security;
-alter table public.messages enable row level security;
+-- Indexes for performance
+CREATE INDEX idx_messages_conversation_created ON public.messages (conversation_id, created_at DESC);
+CREATE INDEX idx_messages_sender ON public.messages (sender_id);
+CREATE INDEX idx_users_username ON public.users (username);
 
--- Policies for users
-create policy "Users can view other users" on public.users
-  for select using (true);
-create policy "Users can insert their own profile" on public.users
-  for insert with check (auth.uid() = id);
-create policy "Users can update their own profile" on public.users
-  for update using (auth.uid() = id);
+-- Enable RLS
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 
--- Policies for conversations
-create policy "Users can view conversations they are part of" on public.conversations
-  for select using (auth.uid() = any(participants));
-create policy "Users can insert conversations they are part of" on public.conversations
-  for insert with check (auth.uid() = any(participants));
-create policy "Users can update conversations they are part of" on public.conversations
-  for update using (auth.uid() = any(participants));
+-- RLS: users
+CREATE POLICY "Users can view other users" ON public.users FOR SELECT USING (true);
+CREATE POLICY "Users can insert their own profile" ON public.users FOR INSERT WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can update their own profile" ON public.users FOR UPDATE USING (auth.uid() = id);
 
--- Policies for messages
-create policy "Users can view messages in their conversations" on public.messages
-  for select using (
-    exists (
-      select 1 from public.conversations c 
-      where c.id = messages.conversation_id 
-      and auth.uid() = any(c.participants)
-    )
+-- RLS: conversations
+CREATE POLICY "Users can view their conversations" ON public.conversations
+  FOR SELECT USING (auth.uid() = ANY(participants));
+CREATE POLICY "Users can insert their conversations" ON public.conversations
+  FOR INSERT WITH CHECK (auth.uid() = ANY(participants));
+CREATE POLICY "Users can update their conversations" ON public.conversations
+  FOR UPDATE USING (auth.uid() = ANY(participants));
+
+-- RLS: messages
+CREATE POLICY "Users can view messages in their conversations" ON public.messages
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM public.conversations c
+      WHERE c.id = messages.conversation_id AND auth.uid() = ANY(c.participants))
   );
-create policy "Users can insert messages in their conversations" on public.messages
-  for insert with check (
-    auth.uid() = sender_id and
-    exists (
-      select 1 from public.conversations c 
-      where c.id = messages.conversation_id 
-      and auth.uid() = any(c.participants)
-    )
+CREATE POLICY "Users can insert messages in their conversations" ON public.messages
+  FOR INSERT WITH CHECK (
+    auth.uid() = sender_id AND
+    EXISTS (SELECT 1 FROM public.conversations c
+      WHERE c.id = messages.conversation_id AND auth.uid() = ANY(c.participants))
   );
 
--- Helper function to sync auth.users with public.users
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
-as $$
-begin
-  insert into public.users (id, username)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1))
-  );
-  return new;
-end;
+-- Auto-sync new auth users into public.users
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  INSERT INTO public.users (id, username)
+  VALUES (NEW.id, coalesce(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1)));
+  RETURN NEW;
+END;
 $$;
 
--- Trigger to call the function when a new user is created
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+-- Auto-delete messages beyond 100 per conversation
+CREATE OR REPLACE FUNCTION prune_old_messages()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM public.messages
+  WHERE conversation_id = NEW.conversation_id
+    AND id NOT IN (
+      SELECT id FROM public.messages
+      WHERE conversation_id = NEW.conversation_id
+      ORDER BY created_at DESC
+      LIMIT 100
+    );
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_prune_messages
+  AFTER INSERT ON public.messages
+  FOR EACH ROW EXECUTE FUNCTION prune_old_messages();

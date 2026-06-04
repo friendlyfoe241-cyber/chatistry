@@ -16,14 +16,17 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
   const [loading, setLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     if (!partner) return;
-    
+
     setLoading(true);
+    setMessages([]);
+    setIsTyping(false);
     const chatId = [currentUser.id, partner.id].sort().join('_');
-    
+
     const fetchMessages = async () => {
       const { data } = await supabase
         .from('messages')
@@ -38,7 +41,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
           senderId: m.sender_id,
           receiverId: m.sender_id === currentUser.id ? partner.id : currentUser.id,
           content: m.content,
-          timestamp: m.created_at
+          timestamp: m.created_at,
         })));
       }
       setLoading(false);
@@ -47,48 +50,48 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
 
     fetchMessages();
 
-    // Listen to new messages
+    // Real-time new messages
     const messageChannel = supabase
-      .channel('messages')
+      .channel(`messages:${chatId}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         (payload) => {
           const m = payload.new;
           setMessages(prev => {
-            const hasDuplicate = prev.some(msg => msg.id === m.id);
-            if (hasDuplicate) return prev;
+            if (prev.some(msg => msg.id === m.id)) return prev;
             return [...prev, {
               id: m.id,
               senderId: m.sender_id,
               receiverId: m.sender_id === currentUser.id ? partner.id : currentUser.id,
               content: m.content,
-              timestamp: m.created_at
+              timestamp: m.created_at,
             }];
           });
+          scrollToBottom();
         }
       )
       .subscribe();
 
-    // Listen to partner's typing status
+    // Typing indicator via Broadcast — zero DB writes
     const typingChannel = supabase
-      .channel('typing_status')
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${partner.id}` },
-        (payload) => {
-          const u = payload.new;
-          setIsTyping(u.is_typing_to === currentUser.id);
-          if (u.is_typing_to === currentUser.id) {
-            scrollToBottom();
-          }
+      .channel(`typing:${chatId}`)
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        if (payload.userId === partner.id) {
+          setIsTyping(true);
+          scrollToBottom();
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000);
         }
-      )
+      })
       .subscribe();
+
+    typingChannelRef.current = typingChannel;
 
     return () => {
       supabase.removeChannel(messageChannel);
       supabase.removeChannel(typingChannel);
+      typingChannelRef.current = null;
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
   }, [partner, currentUser.id]);
@@ -101,26 +104,14 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const setTypingStatus = async (typingTo: string | null) => {
-    await supabase
-      .from('users')
-      .update({ is_typing_to: typingTo, updated_at: new Date().toISOString() })
-      .eq('id', currentUser.id);
-  };
-
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-    
-    if (partner) {
-      setTypingStatus(partner.id);
-      
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      
-      typingTimeoutRef.current = setTimeout(() => {
-        setTypingStatus(null);
-      }, 1500);
+    if (partner && typingChannelRef.current) {
+      typingChannelRef.current.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { userId: currentUser.id },
+      });
     }
   };
 
@@ -138,7 +129,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
           id: chatId,
           participants: [currentUser.id, partner!.id],
           created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         });
     }
   };
@@ -146,14 +137,9 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !partner) return;
-    
+
     const text = input.trim();
     setInput('');
-    
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-    setTypingStatus(null);
 
     const chatId = [currentUser.id, partner.id].sort().join('_');
     await ensureConversation(chatId);
@@ -164,27 +150,24 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
         conversation_id: chatId,
         sender_id: currentUser.id,
         content: text,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       })
       .select()
       .single();
-      
+
     if (data) {
-      // Optimistic update
       setMessages(prev => {
-        const hasDuplicate = prev.some(msg => msg.id === data.id);
-        if (hasDuplicate) return prev;
+        if (prev.some(msg => msg.id === data.id)) return prev;
         return [...prev, {
           id: data.id,
           senderId: data.sender_id,
           receiverId: partner.id,
           content: data.content,
-          timestamp: data.created_at
+          timestamp: data.created_at,
         }];
       });
     }
 
-    // Update recent conversation timestamp
     await supabase
       .from('conversations')
       .update({ updated_at: new Date().toISOString() })
@@ -207,7 +190,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
       <div className="h-16 border-b border-[#2A2A2A] bg-[#0E0E0E] px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <div className="text-lg font-semibold">@{partner.username}</div>
-          <div className="px-2 py-0.5 rounded bg-cyan-900/20 border border-cyan-800/40 text-[10px] text-cyan-400 font-mono">SUPABASE_SYNCED</div>
+          <div className="px-2 py-0.5 rounded bg-cyan-900/20 border border-cyan-800/40 text-[10px] text-cyan-400 font-mono">LIVE</div>
         </div>
       </div>
 
@@ -215,7 +198,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
       <div className="flex-1 overflow-y-auto p-6 space-y-6 relative">
         {loading ? (
           <div className="flex justify-center py-4">
-             <div className="w-6 h-6 border-2 border-[#333] border-t-cyan-500 rounded-full animate-spin" />
+            <div className="w-6 h-6 border-2 border-[#333] border-t-cyan-500 rounded-full animate-spin" />
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center opacity-30 pointer-events-none mb-4 mt-10">
@@ -223,77 +206,77 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
           </div>
         ) : (
           <div className="flex flex-col space-y-4">
-             {messages.map((msg, i) => {
-               const isMe = msg.senderId === currentUser.id;
-               const prevMsg = messages[i - 1];
-               const showAvatar = !isMe && (!prevMsg || prevMsg.senderId !== msg.senderId);
+            {messages.map((msg, i) => {
+              const isMe = msg.senderId === currentUser.id;
+              const prevMsg = messages[i - 1];
+              const showAvatar = !isMe && (!prevMsg || prevMsg.senderId !== msg.senderId);
 
-               return (
-                 <motion.div 
-                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                   animate={{ opacity: 1, y: 0, scale: 1 }}
-                   key={msg.id} 
-                   className={cn(
-                     "flex max-w-[60%]",
-                     isMe ? "self-end flex-row-reverse" : "self-start",
-                     showAvatar ? "mt-4" : ""
-                   )}
-                 >
-                   {!isMe ? (
-                     showAvatar ? (
-                       <div className="w-8 h-8 rounded bg-[#1A1A1A] flex-shrink-0 flex items-center justify-center text-[10px] font-bold border border-[#2A2A2A] text-[#E0E0E0] mr-3">
-                         {partner.username.substring(0, 2).toUpperCase()}
-                       </div>
-                     ) : (
-                       <div className="w-8 h-8 flex-shrink-0 mr-3" />
-                     )
-                   ) : (
-                     <div className="w-8 h-8 rounded bg-cyan-900 flex-shrink-0 flex items-center justify-center text-[10px] font-bold border border-cyan-800 text-cyan-50 ml-3">
-                       {currentUser.username.substring(0, 2).toUpperCase()}
-                     </div>
-                   )}
-                   <div className="w-full space-y-1">
-                     <div 
-                       className={cn(
-                         "p-3 text-sm leading-relaxed whitespace-pre-wrap break-words min-w-0 max-w-full",
-                         isMe 
-                            ? "bg-cyan-950/40 border border-cyan-900/60 rounded-tl-xl rounded-bl-xl rounded-br-xl text-cyan-50" 
-                            : "bg-[#181818] border border-[#222] rounded-tr-xl rounded-br-xl rounded-bl-xl text-[#E0E0E0]"
-                       )}
-                     >
-                       {msg.content}
-                     </div>
-                     <div className={cn("text-[10px] text-[#555] px-1 italic", isMe ? "text-right" : "")}>
-                       {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                     </div>
-                   </div>
-                 </motion.div>
-               );
-             })}
-             {isTyping && (
-               <motion.div 
-                 initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                 className="flex max-w-[60%] self-start mt-4"
-               >
-                 <div className="w-8 h-8 rounded bg-[#1A1A1A] flex-shrink-0 flex items-center justify-center text-[10px] font-bold border border-[#2A2A2A] text-[#E0E0E0] mr-3">
-                   {partner.username.substring(0, 2).toUpperCase()}
-                 </div>
-                 <div className="w-full space-y-1">
-                   <div className="p-3.5 flex gap-1.5 w-fit bg-[#181818] border border-[#222] rounded-tr-xl rounded-br-xl rounded-bl-xl items-center">
-                     <div className="w-1.5 h-1.5 bg-cyan-500/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                     <div className="w-1.5 h-1.5 bg-cyan-500/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                     <div className="w-1.5 h-1.5 bg-cyan-500/80 rounded-full animate-bounce"></div>
-                   </div>
-                 </div>
-               </motion.div>
-             )}
+              return (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  key={msg.id}
+                  className={cn(
+                    "flex max-w-[60%]",
+                    isMe ? "self-end flex-row-reverse" : "self-start",
+                    showAvatar ? "mt-4" : ""
+                  )}
+                >
+                  {!isMe ? (
+                    showAvatar ? (
+                      <div className="w-8 h-8 rounded bg-[#1A1A1A] flex-shrink-0 flex items-center justify-center text-[10px] font-bold border border-[#2A2A2A] text-[#E0E0E0] mr-3">
+                        {partner.username.substring(0, 2).toUpperCase()}
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 flex-shrink-0 mr-3" />
+                    )
+                  ) : (
+                    <div className="w-8 h-8 rounded bg-cyan-900 flex-shrink-0 flex items-center justify-center text-[10px] font-bold border border-cyan-800 text-cyan-50 ml-3">
+                      {currentUser.username.substring(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="w-full space-y-1">
+                    <div
+                      className={cn(
+                        "p-3 text-sm leading-relaxed whitespace-pre-wrap break-words min-w-0 max-w-full",
+                        isMe
+                          ? "bg-cyan-950/40 border border-cyan-900/60 rounded-tl-xl rounded-bl-xl rounded-br-xl text-cyan-50"
+                          : "bg-[#181818] border border-[#222] rounded-tr-xl rounded-br-xl rounded-bl-xl text-[#E0E0E0]"
+                      )}
+                    >
+                      {msg.content}
+                    </div>
+                    <div className={cn("text-[10px] text-[#555] px-1 italic", isMe ? "text-right" : "")}>
+                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+            {isTyping && (
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                className="flex max-w-[60%] self-start mt-4"
+              >
+                <div className="w-8 h-8 rounded bg-[#1A1A1A] flex-shrink-0 flex items-center justify-center text-[10px] font-bold border border-[#2A2A2A] text-[#E0E0E0] mr-3">
+                  {partner.username.substring(0, 2).toUpperCase()}
+                </div>
+                <div className="w-full space-y-1">
+                  <div className="p-3.5 flex gap-1.5 w-fit bg-[#181818] border border-[#222] rounded-tr-xl rounded-br-xl rounded-bl-xl items-center">
+                    <div className="w-1.5 h-1.5 bg-cyan-500/80 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                    <div className="w-1.5 h-1.5 bg-cyan-500/80 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                    <div className="w-1.5 h-1.5 bg-cyan-500/80 rounded-full animate-bounce"></div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </div>
         )}
         <div ref={endOfMessagesRef} />
       </div>
 
-      {/* Input Box */}
+      {/* Input */}
       <footer className="p-6 bg-[#0E0E0E] border-t border-[#2A2A2A] shrink-0">
         <form onSubmit={handleSend} className="flex items-center gap-4">
           <div className="flex-1 flex items-center bg-[#181818] border border-[#2A2A2A] rounded-full px-5 py-2.5 focus-within:border-cyan-600 transition-all">
@@ -311,7 +294,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
               rows={1}
             />
           </div>
-          <button 
+          <button
             type="submit"
             disabled={!input.trim()}
             className="w-11 h-11 bg-cyan-600 hover:bg-cyan-500 rounded-full flex items-center justify-center text-black shadow-[0_0_15px_rgba(8,145,178,0.2)] disabled:opacity-50 disabled:cursor-not-allowed shrink-0 transition-colors"

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User } from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar } from './components/Sidebar';
@@ -10,6 +10,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activePartner, setActivePartner] = useState<User | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
+  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -22,20 +23,12 @@ export default function App() {
       setLoading(false);
     });
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser({
           id: session.user.id,
           username: session.user.user_metadata.username,
         });
-        
-        // Mark as online
-        await supabase
-          .from('users')
-          .update({ is_online: true, updated_at: new Date().toISOString() })
-          .eq('id', session.user.id);
       } else {
         setUser(null);
       }
@@ -45,59 +38,43 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Online presence via Realtime Presence — auto-cleans on disconnect/crash
   useEffect(() => {
-    if (!user) return;
-    
-    // Listen for online users
-    const channel = supabase
-      .channel('public:users')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'users' },
-        (payload) => {
-          fetchOnlineUsers();
-        }
-      )
-      .subscribe();
-
-    const fetchOnlineUsers = async () => {
-      const { data } = await supabase
-        .from('users')
-        .select('id')
-        .eq('is_online', true);
-      
-      if (data) {
-        setOnlineUserIds(data.map(u => u.id));
+    if (!user) {
+      if (presenceChannelRef.current) {
+        supabase.removeChannel(presenceChannelRef.current);
+        presenceChannelRef.current = null;
       }
-    };
+      return;
+    }
 
-    fetchOnlineUsers();
+    const channel = supabase.channel('online-users');
+
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        const ids = Object.values(state)
+          .flat()
+          .map((p: any) => p.user_id as string);
+        setOnlineUserIds(ids);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ user_id: user.id });
+        }
+      });
+
+    presenceChannelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
+      presenceChannelRef.current = null;
     };
-  }, [user]);
-
-  // Set user as offline when leaving
-  useEffect(() => {
-    const handleBeforeUnload = async () => {
-      if (user) {
-        await supabase
-          .from('users')
-          .update({ is_online: false, updated_at: new Date().toISOString() })
-          .eq('id', user.id);
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [user]);
 
   const handleLogout = async () => {
-    if (user) {
-      await supabase
-        .from('users')
-        .update({ is_online: false, updated_at: new Date().toISOString() })
-        .eq('id', user.id);
+    if (presenceChannelRef.current) {
+      await presenceChannelRef.current.untrack();
     }
     await supabase.auth.signOut();
     setUser(null);
@@ -118,18 +95,17 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#080808] overflow-hidden font-sans text-[#E0E0E0]">
-      <Sidebar 
-        currentUser={user} 
-        activePartner={activePartner} 
-        onSelectPartner={setActivePartner} 
+      <Sidebar
+        currentUser={user}
+        activePartner={activePartner}
+        onSelectPartner={setActivePartner}
         onLogout={handleLogout}
         onlineUserIds={onlineUserIds}
       />
-      <ChatArea 
-        currentUser={user} 
-        partner={activePartner} 
+      <ChatArea
+        currentUser={user}
+        partner={activePartner}
       />
     </div>
   );
 }
-
