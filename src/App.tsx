@@ -12,23 +12,28 @@ export default function App() {
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
+  const fetchProfile = async (userId: string, username: string): Promise<User> => {
+    const { data } = await supabase
+      .from('users')
+      .select('avatar_url')
+      .eq('id', userId)
+      .single();
+    return { id: userId, username, avatarUrl: data?.avatar_url ?? undefined };
+  };
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user) {
-        setUser({
-          id: session.user.id,
-          username: session.user.user_metadata.username,
-        });
+        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
+        setUser(profile);
       }
       setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
-        setUser({
-          id: session.user.id,
-          username: session.user.user_metadata.username,
-        });
+        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
+        setUser(profile);
       } else {
         setUser(null);
       }
@@ -38,7 +43,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Online presence via Realtime Presence — auto-cleans on disconnect/crash
+  // Online presence
   useEffect(() => {
     if (!user) {
       if (presenceChannelRef.current) {
@@ -49,36 +54,29 @@ export default function App() {
     }
 
     const channel = supabase.channel('online-users');
-
     channel
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
-        const ids = Object.values(state)
-          .flat()
-          .map((p: any) => p.user_id as string);
+        const ids = Object.values(state).flat().map((p: any) => p.user_id as string);
         setOnlineUserIds(ids);
       })
       .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await channel.track({ user_id: user.id });
-        }
+        if (status === 'SUBSCRIBED') await channel.track({ user_id: user.id });
       });
 
     presenceChannelRef.current = channel;
-
-    return () => {
-      supabase.removeChannel(channel);
-      presenceChannelRef.current = null;
-    };
+    return () => { supabase.removeChannel(channel); presenceChannelRef.current = null; };
   }, [user]);
 
   const handleLogout = async () => {
-    if (presenceChannelRef.current) {
-      await presenceChannelRef.current.untrack();
-    }
+    if (presenceChannelRef.current) await presenceChannelRef.current.untrack();
     await supabase.auth.signOut();
     setUser(null);
     setActivePartner(null);
+  };
+
+  const handleAvatarUpdate = (avatarUrl: string) => {
+    setUser(prev => prev ? { ...prev, avatarUrl } : prev);
   };
 
   if (loading) {
@@ -89,9 +87,7 @@ export default function App() {
     );
   }
 
-  if (!user) {
-    return <AuthScreen />;
-  }
+  if (!user) return <AuthScreen />;
 
   return (
     <div className="flex h-screen bg-[#080808] overflow-hidden font-sans text-[#E0E0E0]">
@@ -101,11 +97,9 @@ export default function App() {
         onSelectPartner={setActivePartner}
         onLogout={handleLogout}
         onlineUserIds={onlineUserIds}
+        onAvatarUpdate={handleAvatarUpdate}
       />
-      <ChatArea
-        currentUser={user}
-        partner={activePartner}
-      />
+      <ChatArea currentUser={user} partner={activePartner} />
     </div>
   );
 }

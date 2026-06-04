@@ -1,6 +1,7 @@
 export interface User {
   id: string;
   username: string;
+  avatarUrl?: string;
 }
 
 export interface Message {
@@ -9,6 +10,10 @@ export interface Message {
   receiverId: string;
   content: string;
   timestamp: string;
+  messageType: 'text' | 'image';
+  imageUrl?: string;
+  isEdited: boolean;
+  originalContent?: string;
 }
 
 export interface ChatPartner extends User {

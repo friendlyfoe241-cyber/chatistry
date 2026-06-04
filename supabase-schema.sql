@@ -96,3 +96,30 @@ $$;
 CREATE TRIGGER trg_prune_messages
   AFTER INSERT ON public.messages
   FOR EACH ROW EXECUTE FUNCTION prune_old_messages();
+
+-- === MIGRATION: images, edit, delete, avatars ===
+
+ALTER TABLE public.messages
+  ADD COLUMN IF NOT EXISTS message_type text NOT NULL DEFAULT 'text',
+  ADD COLUMN IF NOT EXISTS image_url text,
+  ADD COLUMN IF NOT EXISTS is_edited boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS original_content text;
+
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS avatar_url text;
+
+CREATE POLICY "Users can update own messages" ON public.messages
+  FOR UPDATE USING (auth.uid() = sender_id);
+
+CREATE POLICY "Users can delete own messages" ON public.messages
+  FOR DELETE USING (auth.uid() = sender_id);
+
+-- Storage
+INSERT INTO storage.buckets (id, name, public) VALUES ('avatars', 'avatars', true) ON CONFLICT DO NOTHING;
+INSERT INTO storage.buckets (id, name, public) VALUES ('chat-images', 'chat-images', true) ON CONFLICT DO NOTHING;
+
+CREATE POLICY "Public avatar read" ON storage.objects FOR SELECT USING (bucket_id = 'avatars');
+CREATE POLICY "Users upload own avatar" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
+CREATE POLICY "Users update own avatar" ON storage.objects FOR UPDATE USING (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
+CREATE POLICY "Users delete own avatar" ON storage.objects FOR DELETE USING (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
+CREATE POLICY "Public chat image read" ON storage.objects FOR SELECT USING (bucket_id = 'chat-images');
+CREATE POLICY "Authenticated users upload chat images" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'chat-images' AND auth.role() = 'authenticated');
