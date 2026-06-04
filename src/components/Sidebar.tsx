@@ -102,7 +102,7 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
     <div className="w-72 bg-[#121212] border-r border-[#2A2A2A] flex flex-col h-screen shrink-0 pb-env(safe-area-inset-bottom)">
       {/* Header Profile */}
       <div className="p-6 border-b border-[#2A2A2A] flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tighter text-cyan-500">Chatice</h1>
+        <h1 className="text-xl font-bold tracking-tighter text-cyan-500">CHATice</h1>
         <button 
           onClick={onLogout}
           className="p-2 text-[#666] hover:text-white transition-colors"
