@@ -199,6 +199,23 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
     setImagePreview(URL.createObjectURL(file));
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          if (file.size > 8 * 1024 * 1024) { alert('Image must be under 8MB'); return; }
+          setImageFile(file);
+          setImagePreview(URL.createObjectURL(file));
+        }
+        return;
+      }
+    }
+  };
+
   const handleSendImage = async () => {
     if (!imageFile || !partner || uploading) return;
     setUploading(true);
@@ -512,7 +529,8 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e as any); }
                   }}
-                  placeholder="Type a message…"
+                  placeholder="Type a message… (or paste an image)"
+                  onPaste={handlePaste}
                   className="flex-1 bg-transparent outline-none text-sm placeholder-[#555] text-[#EEE] resize-none max-h-32 min-h-[20px] block w-full"
                   rows={1}
                 />
