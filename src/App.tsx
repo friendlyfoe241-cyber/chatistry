@@ -18,7 +18,6 @@ export default function App() {
   const activePartnerRef = useRef<User | null>(null);
   const userCacheRef = useRef<Map<string, User>>(new Map());
 
-  // Keep ref in sync with state
   useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
 
   const fetchProfile = async (userId: string, username: string): Promise<User> => {
@@ -26,15 +25,65 @@ export default function App() {
     return { id: userId, username, avatarUrl: data?.avatar_url ?? undefined };
   };
 
+  // Load persistent unread counts from DB — works even if website was closed
+  const loadUnreadCounts = async (userId: string) => {
+    const { data: convs } = await supabase
+      .from('conversations')
+      .select('id, participants')
+      .contains('participants', [userId]);
+
+    if (!convs?.length) return;
+
+    // Fetch all read timestamps for this user at once
+    const convIds = convs.map((c: any) => c.id);
+    const { data: reads } = await supabase
+      .from('conversation_reads')
+      .select('conversation_id, last_read_at')
+      .eq('user_id', userId)
+      .in('conversation_id', convIds);
+
+    const readMap: Record<string, string> = {};
+    reads?.forEach((r: any) => { readMap[r.conversation_id] = r.last_read_at; });
+
+    // Count unread messages per conversation in parallel
+    const counts: Record<string, number> = {};
+    await Promise.all(convs.map(async (conv: any) => {
+      const partnerId = conv.participants.find((id: string) => id !== userId);
+      if (!partnerId) return;
+
+      const lastRead = readMap[conv.id] ?? '1970-01-01T00:00:00Z';
+      const { count } = await supabase
+        .from('messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('conversation_id', conv.id)
+        .neq('sender_id', userId)
+        .gt('created_at', lastRead);
+
+      if (count && count > 0) counts[partnerId] = count;
+    }));
+
+    setUnreadCounts(counts);
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session?.user) setUser(await fetchProfile(session.user.id, session.user.user_metadata.username));
+      if (session?.user) {
+        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
+        setUser(profile);
+        await loadUnreadCounts(session.user.id);
+      }
       setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_e, session) => {
-      if (session?.user) setUser(await fetchProfile(session.user.id, session.user.user_metadata.username));
-      else setUser(null);
+      if (session?.user) {
+        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
+        setUser(profile);
+        await loadUnreadCounts(session.user.id);
+      } else {
+        setUser(null);
+        setUnreadCounts({});
+      }
       setLoading(false);
     });
 
@@ -58,7 +107,7 @@ export default function App() {
     return () => { supabase.removeChannel(channel); presenceChannelRef.current = null; };
   }, [user]);
 
-  // Global incoming message listener — notifications + unread badges
+  // Global incoming message listener — real-time notifications + in-session unread increments
   useEffect(() => {
     if (!user) return;
 
@@ -68,12 +117,10 @@ export default function App() {
         async ({ new: msg }) => {
           if (msg.sender_id === user.id) return;
 
-          // Skip if this is the currently open conversation
           const activeId = activePartnerRef.current?.id;
           const activeChatId = activeId ? [user.id, activeId].sort().join('_') : null;
           if (msg.conversation_id === activeChatId) return;
 
-          // Resolve sender (cache to avoid repeated DB calls)
           let sender = userCacheRef.current.get(msg.sender_id);
           if (!sender) {
             const { data } = await supabase
@@ -87,10 +134,10 @@ export default function App() {
 
           const senderSnapshot = sender;
 
-          // Unread badge
+          // Increment in-memory unread
           setUnreadCounts(prev => ({ ...prev, [msg.sender_id]: (prev[msg.sender_id] || 0) + 1 }));
 
-          // Toast notification (cap at 5 simultaneous)
+          // Toast
           const notifId = `${Date.now()}-${Math.random()}`;
           setNotifications(prev => [
             ...prev.slice(-4),
@@ -104,16 +151,25 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [user]);
 
-  const handleSelectPartner = (partner: User) => {
+  const handleSelectPartner = async (partner: User) => {
     setActivePartner(partner);
     setUnreadCounts(prev => ({ ...prev, [partner.id]: 0 }));
     setNotifications(prev => prev.filter(n => n.sender.id !== partner.id));
+
+    // Persist read timestamp so unread state survives page refresh/close
+    if (user) {
+      const chatId = [user.id, partner.id].sort().join('_');
+      await supabase.from('conversation_reads').upsert(
+        { user_id: user.id, conversation_id: chatId, last_read_at: new Date().toISOString() },
+        { onConflict: 'user_id,conversation_id' }
+      );
+    }
   };
 
   const handleLogout = async () => {
     if (presenceChannelRef.current) await presenceChannelRef.current.untrack();
     await supabase.auth.signOut();
-    setUser(null); setActivePartner(null);
+    setUser(null); setActivePartner(null); setUnreadCounts({});
   };
 
   const handleAvatarUpdate = (avatarUrl: string) => setUser(prev => prev ? { ...prev, avatarUrl } : prev);

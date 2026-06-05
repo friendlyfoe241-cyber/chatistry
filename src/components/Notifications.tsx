@@ -51,7 +51,7 @@ function Toast({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-semibold text-[#E0E0E0] leading-none mb-1">@{item.sender.username}</div>
           <div className="text-xs text-[#888] truncate leading-snug">
-            {item.messageType === 'image'
+            {item.messageType !== 'text'
               ? <span className="flex items-center gap-1"><ImageIcon className="w-3 h-3 inline" /> Sent an image</span>
               : item.message.length > 70 ? item.message.slice(0, 70) + '…' : item.message}
           </div>

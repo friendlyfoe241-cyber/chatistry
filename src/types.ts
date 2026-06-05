@@ -10,8 +10,8 @@ export interface Message {
   receiverId: string;
   content: string;
   timestamp: string;
-  messageType: 'text' | 'image';
-  imageUrl?: string;
+  messageType: 'text' | 'image' | 'video';
+  mediaUrl?: string;
   isEdited: boolean;
   originalContent?: string;
 }
