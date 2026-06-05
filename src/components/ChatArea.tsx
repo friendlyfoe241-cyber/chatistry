@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
 import { supabase } from '../supabase';
 import { Avatar } from './Avatar';
+import { EmojiPicker } from './EmojiPicker';
 
 interface ChatAreaProps {
   currentUser: User;
@@ -95,14 +96,25 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
   const [expandedOriginals, setExpandedOriginals] = useState<Set<string>>(new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ url: string; type: 'image' | 'video' } | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const scrollToBottom = useCallback(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
+
+  // Auto-focus textarea when conversation opens or reply is triggered
+  useEffect(() => {
+    if (partner) setTimeout(() => textareaRef.current?.focus(), 120);
+  }, [partner]);
+
+  useEffect(() => {
+    if (replyingTo) textareaRef.current?.focus();
+  }, [replyingTo]);
 
   // Close emoji picker on outside click
   useEffect(() => {
@@ -251,6 +263,20 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
         return;
       }
     }
+  };
+
+  const insertEmoji = (emoji: string) => {
+    const el = textareaRef.current;
+    if (!el) { setInput(prev => prev + emoji); return; }
+    const start = el.selectionStart ?? input.length;
+    const end = el.selectionEnd ?? input.length;
+    const next = input.slice(0, start) + emoji + input.slice(end);
+    setInput(next);
+    setShowEmojiPicker(false);
+    setTimeout(() => {
+      el.focus();
+      el.selectionStart = el.selectionEnd = start + emoji.length;
+    }, 0);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -681,6 +707,25 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
             <Paperclip className="w-4 h-4" />
           </button>
 
+          {/* Emoji button + picker */}
+          <div className="relative flex-shrink-0 mb-0.5">
+            <button type="button" onClick={() => setShowEmojiPicker(p => !p)}
+              className={cn(
+                'w-10 h-10 rounded-full bg-[#181818] border flex items-center justify-center transition-colors',
+                showEmojiPicker
+                  ? 'border-cyan-700 text-cyan-400'
+                  : 'border-[#2A2A2A] text-[#555] hover:text-cyan-400 hover:border-cyan-800'
+              )}
+              title="Emoji">
+              <Smile className="w-4 h-4" />
+            </button>
+            <AnimatePresence>
+              {showEmojiPicker && (
+                <EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmojiPicker(false)} />
+              )}
+            </AnimatePresence>
+          </div>
+
           {mediaPreview ? (
             <button type="button" onClick={handleSendMedia} disabled={uploading}
               className="flex-1 h-10 rounded-full bg-cyan-600 hover:bg-cyan-500 text-black text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50 transition-colors">
@@ -692,7 +737,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
           ) : (
             <form onSubmit={handleSendText} className="flex-1 flex items-end gap-3">
               <div className="flex-1 flex items-end bg-[#181818] border border-[#2A2A2A] rounded-2xl px-4 py-2.5 focus-within:border-cyan-700 transition-colors">
-                <textarea value={input} onChange={handleInputChange} onPaste={handlePaste}
+                <textarea ref={textareaRef} value={input} onChange={handleInputChange} onPaste={handlePaste}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e as any); } }}
                   placeholder="Type a message… or paste / attach media"
                   className="flex-1 bg-transparent outline-none text-sm placeholder-[#555] text-[#EEE] resize-none max-h-32 min-h-[20px] block w-full"
