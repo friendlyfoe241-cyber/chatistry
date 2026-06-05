@@ -14,7 +14,15 @@ export interface Message {
   mediaUrl?: string;
   isEdited: boolean;
   originalContent?: string;
+  // Reply fields
+  replyToId?: string;
+  replyToContent?: string;
+  replyToSenderId?: string;
+  replyToMessageType?: 'text' | 'image' | 'video';
 }
+
+// emoji -> array of userIds who reacted
+export type ReactionsMap = Record<string, string[]>;
 
 export interface ChatPartner extends User {
   lastMessage?: string;
