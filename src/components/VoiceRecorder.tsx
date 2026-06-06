@@ -32,7 +32,7 @@ export function VoiceRecorder({ onSend, onCancel }: Props) {
   useEffect(() => {
     if (phase !== 'recording') return;
     const id = setInterval(() => {
-      setWaveHeights(WAVE_HEIGHTS.map(h => Math.max(3, h + Math.floor(Math.random() * 8 - 4)));
+      setWaveHeights(WAVE_HEIGHTS.map(h => Math.max(3, h + Math.floor(Math.random() * 8 - 4))));
     }, 150);
     return () => clearInterval(id);
   }, [phase]);
