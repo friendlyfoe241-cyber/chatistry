@@ -6,23 +6,62 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+/* ── Dark theme (default) ── */
+:root {
+  --bg:       #080808;
+  --surface:  #0e0e0e;
+  --surface2: #121212;
+  --surface3: #181818;
+  --surface4: #1e1e1e;
+  --border:   #2a2a2a;
+  --border2:  #252525;
+  --border3:  #333333;
+  --txt:      #e0e0e0;
+  --txt2:     #888888;
+  --txt3:     #555555;
+  --txt4:     #444444;
+  --bubble-me-bg:     rgba(8,37,61,0.45);
+  --bubble-me-border: rgba(22,78,99,0.65);
+  --bubble-me-text:   #e0f2fe;
+  --bubble-them-bg:   #181818;
+  --bubble-them-border:#252525;
+  --input-bg: #181818;
+}
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --bg:       #f0f4f8;
+  --surface:  #f8fafc;
+  --surface2: #ffffff;
+  --surface3: #f1f5f9;
+  --surface4: #e8eef5;
+  --border:   #e2e8f0;
+  --border2:  #cbd5e1;
+  --border3:  #94a3b8;
+  --txt:      #1e293b;
+  --txt2:     #475569;
+  --txt3:     #94a3b8;
+  --txt4:     #cbd5e1;
+  --bubble-me-bg:     rgba(14,116,144,0.1);
+  --bubble-me-border: rgba(14,116,144,0.3);
+  --bubble-me-text:   #0c4a6e;
+  --bubble-them-bg:   #ffffff;
+  --bubble-them-border:#e2e8f0;
+  --input-bg: #f8fafc;
+}
+
 body {
-  @apply bg-[#0A0A0A] text-[#E0E0E0] antialiased selection:bg-cyan-900 selection:text-white;
+  background-color: var(--bg);
+  color: var(--txt);
+  @apply antialiased selection:bg-cyan-900 selection:text-white;
 }
 
-/* Custom scrollbar for stealth look */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #2A2A2A;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #444;
-}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border3); }
 
+@keyframes voiceWave {
+  0%   { transform: scaleY(0.3); }
+  100% { transform: scaleY(1.0); }
+}

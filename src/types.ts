@@ -2,6 +2,7 @@ export interface User {
   id: string;
   username: string;
   avatarUrl?: string;
+  lastSeenAt?: string;
 }
 
 export interface Message {
@@ -10,20 +11,24 @@ export interface Message {
   receiverId: string;
   content: string;
   timestamp: string;
-  messageType: 'text' | 'image' | 'video';
+  messageType: 'text' | 'image' | 'video' | 'audio';
   mediaUrl?: string;
   isEdited: boolean;
   originalContent?: string;
-  // Reply fields
   replyToId?: string;
   replyToContent?: string;
   replyToSenderId?: string;
-  replyToMessageType?: 'text' | 'image' | 'video';
+  replyToMessageType?: string;
 }
 
-// emoji -> array of userIds who reacted
 export type ReactionsMap = Record<string, string[]>;
 
-export interface ChatPartner extends User {
-  lastMessage?: string;
+export interface PinnedMessage {
+  id: string;
+  messageId: string;
+  conversationId: string;
+  messageContent: string;
+  messageType: 'text' | 'image' | 'video' | 'audio';
+  pinnedBy: string;
+  pinnedAt: string;
 }

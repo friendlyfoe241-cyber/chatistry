@@ -21,49 +21,42 @@ export default function App() {
   useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
 
   const fetchProfile = async (userId: string, username: string): Promise<User> => {
-    const { data } = await supabase.from('users').select('avatar_url').eq('id', userId).single();
-    return { id: userId, username, avatarUrl: data?.avatar_url ?? undefined };
+    const { data } = await supabase.from('users').select('avatar_url, last_seen_at').eq('id', userId).single();
+    return { id: userId, username, avatarUrl: data?.avatar_url ?? undefined, lastSeenAt: data?.last_seen_at ?? undefined };
   };
 
-  // Load persistent unread counts from DB — works even if website was closed
   const loadUnreadCounts = async (userId: string) => {
     const { data: convs } = await supabase
-      .from('conversations')
-      .select('id, participants')
-      .contains('participants', [userId]);
-
+      .from('conversations').select('id, participants').contains('participants', [userId]);
     if (!convs?.length) return;
-
-    // Fetch all read timestamps for this user at once
     const convIds = convs.map((c: any) => c.id);
     const { data: reads } = await supabase
-      .from('conversation_reads')
-      .select('conversation_id, last_read_at')
-      .eq('user_id', userId)
-      .in('conversation_id', convIds);
-
+      .from('conversation_reads').select('conversation_id, last_read_at')
+      .eq('user_id', userId).in('conversation_id', convIds);
     const readMap: Record<string, string> = {};
     reads?.forEach((r: any) => { readMap[r.conversation_id] = r.last_read_at; });
-
-    // Count unread messages per conversation in parallel
     const counts: Record<string, number> = {};
     await Promise.all(convs.map(async (conv: any) => {
       const partnerId = conv.participants.find((id: string) => id !== userId);
       if (!partnerId) return;
-
       const lastRead = readMap[conv.id] ?? '1970-01-01T00:00:00Z';
-      const { count } = await supabase
-        .from('messages')
+      const { count } = await supabase.from('messages')
         .select('id', { count: 'exact', head: true })
-        .eq('conversation_id', conv.id)
-        .neq('sender_id', userId)
-        .gt('created_at', lastRead);
-
+        .eq('conversation_id', conv.id).neq('sender_id', userId).gt('created_at', lastRead);
       if (count && count > 0) counts[partnerId] = count;
     }));
-
     setUnreadCounts(counts);
   };
+
+  // Update last_seen_at on page unload
+  useEffect(() => {
+    if (!user) return;
+    const update = () => {
+      supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', user.id);
+    };
+    window.addEventListener('beforeunload', update);
+    return () => window.removeEventListener('beforeunload', update);
+  }, [user?.id]);
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -74,23 +67,17 @@ export default function App() {
       }
       setLoading(false);
     });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_e, session) => {
       if (session?.user) {
         const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
         setUser(profile);
         await loadUnreadCounts(session.user.id);
-      } else {
-        setUser(null);
-        setUnreadCounts({});
-      }
+      } else { setUser(null); setUnreadCounts({}); }
       setLoading(false);
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
-  // Online presence
   useEffect(() => {
     if (!user) {
       if (presenceChannelRef.current) { supabase.removeChannel(presenceChannelRef.current); presenceChannelRef.current = null; }
@@ -107,47 +94,26 @@ export default function App() {
     return () => { supabase.removeChannel(channel); presenceChannelRef.current = null; };
   }, [user]);
 
-  // Global incoming message listener — real-time notifications + in-session unread increments
   useEffect(() => {
     if (!user) return;
-
     const channel = supabase.channel('app-notifications')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        async ({ new: msg }) => {
-          if (msg.sender_id === user.id) return;
-
-          const activeId = activePartnerRef.current?.id;
-          const activeChatId = activeId ? [user.id, activeId].sort().join('_') : null;
-          if (msg.conversation_id === activeChatId) return;
-
-          let sender = userCacheRef.current.get(msg.sender_id);
-          if (!sender) {
-            const { data } = await supabase
-              .from('users').select('id, username, avatar_url').eq('id', msg.sender_id).single();
-            if (data) {
-              sender = { id: data.id, username: data.username, avatarUrl: data.avatar_url ?? undefined };
-              userCacheRef.current.set(msg.sender_id, sender);
-            }
-          }
-          if (!sender) return;
-
-          const senderSnapshot = sender;
-
-          // Increment in-memory unread
-          setUnreadCounts(prev => ({ ...prev, [msg.sender_id]: (prev[msg.sender_id] || 0) + 1 }));
-
-          // Toast
-          const notifId = `${Date.now()}-${Math.random()}`;
-          setNotifications(prev => [
-            ...prev.slice(-4),
-            { id: notifId, sender: senderSnapshot, message: msg.content ?? '', messageType: msg.message_type ?? 'text' },
-          ]);
-          setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notifId)), 5000);
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async ({ new: msg }) => {
+        if (msg.sender_id === user.id) return;
+        const activeId = activePartnerRef.current?.id;
+        const activeChatId = activeId ? [user.id, activeId].sort().join('_') : null;
+        if (msg.conversation_id === activeChatId) return;
+        let sender = userCacheRef.current.get(msg.sender_id);
+        if (!sender) {
+          const { data } = await supabase.from('users').select('id, username, avatar_url').eq('id', msg.sender_id).single();
+          if (data) { sender = { id: data.id, username: data.username, avatarUrl: data.avatar_url ?? undefined }; userCacheRef.current.set(msg.sender_id, sender); }
         }
-      )
-      .subscribe();
-
+        if (!sender) return;
+        const senderSnapshot = sender;
+        setUnreadCounts(prev => ({ ...prev, [msg.sender_id]: (prev[msg.sender_id] || 0) + 1 }));
+        const notifId = `${Date.now()}-${Math.random()}`;
+        setNotifications(prev => [...prev.slice(-4), { id: notifId, sender: senderSnapshot, message: msg.content ?? '', messageType: msg.message_type ?? 'text' }]);
+        setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notifId)), 5000);
+      }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [user]);
 
@@ -155,8 +121,6 @@ export default function App() {
     setActivePartner(partner);
     setUnreadCounts(prev => ({ ...prev, [partner.id]: 0 }));
     setNotifications(prev => prev.filter(n => n.sender.id !== partner.id));
-
-    // Persist read timestamp so unread state survives page refresh/close
     if (user) {
       const chatId = [user.id, partner.id].sort().join('_');
       await supabase.from('conversation_reads').upsert(
@@ -167,6 +131,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    if (user) await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', user.id);
     if (presenceChannelRef.current) await presenceChannelRef.current.untrack();
     await supabase.auth.signOut();
     setUser(null); setActivePartner(null); setUnreadCounts({});
@@ -174,28 +139,22 @@ export default function App() {
 
   const handleAvatarUpdate = (avatarUrl: string) => setUser(prev => prev ? { ...prev, avatarUrl } : prev);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0A0A0A] flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-[#333] border-t-cyan-500 rounded-full animate-spin" />
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
+      <div className="w-8 h-8 border-4 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
+    </div>
+  );
 
   if (!user) return <AuthScreen />;
 
   return (
-    <div className="flex h-screen bg-[#080808] overflow-hidden font-sans text-[#E0E0E0]">
+    <div className="flex h-screen bg-[var(--bg)] overflow-hidden font-sans text-[var(--txt)]">
       <Sidebar
-        currentUser={user}
-        activePartner={activePartner}
-        onSelectPartner={handleSelectPartner}
-        onLogout={handleLogout}
-        onlineUserIds={onlineUserIds}
-        onAvatarUpdate={handleAvatarUpdate}
-        unreadCounts={unreadCounts}
+        currentUser={user} activePartner={activePartner}
+        onSelectPartner={handleSelectPartner} onLogout={handleLogout}
+        onlineUserIds={onlineUserIds} onAvatarUpdate={handleAvatarUpdate} unreadCounts={unreadCounts}
       />
-      <ChatArea currentUser={user} partner={activePartner} />
+      <ChatArea currentUser={user} partner={activePartner} onlineUserIds={onlineUserIds} />
       <Notifications
         items={notifications}
         onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}

@@ -123,3 +123,73 @@ CREATE POLICY "Users update own avatar" ON storage.objects FOR UPDATE USING (buc
 CREATE POLICY "Users delete own avatar" ON storage.objects FOR DELETE USING (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
 CREATE POLICY "Public chat image read" ON storage.objects FOR SELECT USING (bucket_id = 'chat-images');
 CREATE POLICY "Authenticated users upload chat images" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'chat-images' AND auth.role() = 'authenticated');
+
+-- ================================================================
+-- MIGRATION: all new features (read receipts, voice, pinning, etc.)
+-- ================================================================
+
+-- conversation_reads (enables unread counts + read receipts)
+CREATE TABLE IF NOT EXISTS public.conversation_reads (
+  user_id        uuid REFERENCES public.users(id) ON DELETE CASCADE,
+  conversation_id text NOT NULL,
+  last_read_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, conversation_id)
+);
+ALTER TABLE public.conversation_reads ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "Users manage own reads" ON public.conversation_reads
+  FOR ALL USING (auth.uid() = user_id);
+
+-- message_reactions (emoji reactions)
+CREATE TABLE IF NOT EXISTS public.message_reactions (
+  id         uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  message_id uuid REFERENCES public.messages(id) ON DELETE CASCADE NOT NULL,
+  user_id    uuid REFERENCES public.users(id)    ON DELETE CASCADE NOT NULL,
+  emoji      text NOT NULL,
+  created_at timestamptz DEFAULT timezone('utc', now()) NOT NULL,
+  UNIQUE(message_id, user_id, emoji)
+);
+ALTER TABLE public.message_reactions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "Users view reactions" ON public.message_reactions FOR SELECT USING (true);
+CREATE POLICY IF NOT EXISTS "Users insert reactions" ON public.message_reactions FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY IF NOT EXISTS "Users delete reactions" ON public.message_reactions FOR DELETE USING (auth.uid() = user_id);
+
+-- Reply fields on messages
+ALTER TABLE public.messages
+  ADD COLUMN IF NOT EXISTS reply_to_id           uuid,
+  ADD COLUMN IF NOT EXISTS reply_to_content      text,
+  ADD COLUMN IF NOT EXISTS reply_to_sender_id    uuid,
+  ADD COLUMN IF NOT EXISTS reply_to_message_type text;
+
+-- last_seen_at on users (for "last seen X ago" in chat header)
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
+
+-- pinned_messages (one pinned message per conversation)
+CREATE TABLE IF NOT EXISTS public.pinned_messages (
+  id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  conversation_id text NOT NULL,
+  message_id      uuid REFERENCES public.messages(id) ON DELETE CASCADE NOT NULL,
+  message_content text NOT NULL,
+  message_type    text NOT NULL DEFAULT 'text',
+  pinned_by       uuid REFERENCES public.users(id) ON DELETE SET NULL,
+  pinned_at       timestamptz DEFAULT timezone('utc', now()) NOT NULL,
+  UNIQUE(conversation_id, message_id)
+);
+ALTER TABLE public.pinned_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "Users view pinned" ON public.pinned_messages FOR SELECT USING (true);
+CREATE POLICY IF NOT EXISTS "Users insert pinned" ON public.pinned_messages FOR INSERT WITH CHECK (auth.uid() = pinned_by);
+CREATE POLICY IF NOT EXISTS "Users delete pinned" ON public.pinned_messages FOR DELETE USING (true);
+
+-- user_pinned_conversations (starred chats in sidebar)
+CREATE TABLE IF NOT EXISTS public.user_pinned_conversations (
+  user_id         uuid REFERENCES public.users(id) ON DELETE CASCADE,
+  conversation_id text NOT NULL,
+  pinned_at       timestamptz DEFAULT timezone('utc', now()) NOT NULL,
+  PRIMARY KEY (user_id, conversation_id)
+);
+ALTER TABLE public.user_pinned_conversations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "Users manage pinned convos" ON public.user_pinned_conversations
+  FOR ALL USING (auth.uid() = user_id);
+
+-- Storage bucket for voice messages (reuses chat-images bucket)
+-- Voice messages are stored under the chat-images bucket as audio files.
+-- (already covered by existing chat-images policies)

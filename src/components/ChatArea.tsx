@@ -1,31 +1,40 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { User, Message, ReactionsMap } from '../types';
+import { User, Message, ReactionsMap, PinnedMessage } from '../types';
 import {
   Send, MessageSquareDashed, Paperclip, X,
-  Pencil, Trash2, Check, ChevronDown, Play, CornerUpLeft, Smile,
+  Pencil, Trash2, Check, CheckCheck, ChevronDown, Play, CornerUpLeft, Smile,
+  Search, SearchX, Mic, Pin, PinOff,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
 import { supabase } from '../supabase';
 import { Avatar } from './Avatar';
 import { EmojiPicker } from './EmojiPicker';
+import { VoiceRecorder } from './VoiceRecorder';
+import { LinkPreview } from './LinkPreview';
 
 interface ChatAreaProps {
   currentUser: User;
   partner: User | null;
+  onlineUserIds: string[];
 }
 
 const EMOJI_SET = ['❤️', '👍', '😂', '😮', '😢', '😡', '🔥', '👏'];
-
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_VIDEO_SIZE = 80 * 1024 * 1024;
 const ACCEPTED_IMAGE = ['image/jpeg','image/png','image/gif','image/webp'];
 const ACCEPTED_VIDEO = ['video/mp4','video/webm','video/ogg','video/quicktime','video/x-msvideo'];
 
-function getMediaType(file: File): 'image' | 'video' | null {
+function getMediaType(file: File): 'image' | 'video' | 'audio' | null {
   if (ACCEPTED_IMAGE.includes(file.type)) return 'image';
   if (ACCEPTED_VIDEO.includes(file.type)) return 'video';
+  if (file.type.startsWith('audio/')) return 'audio';
   return null;
+}
+
+function extractFirstUrl(text: string): string | null {
+  const m = /https?:\/\/[^\s<>"{}|\\^\[\]`]+/.exec(text);
+  return m ? m[0] : null;
 }
 
 function renderTextWithLinks(text: string): React.ReactNode[] {
@@ -47,29 +56,72 @@ function renderTextWithLinks(text: string): React.ReactNode[] {
 
 function mapRow(m: any, currentUserId: string, partnerId: string): Message {
   return {
-    id: m.id,
-    senderId: m.sender_id,
+    id: m.id, senderId: m.sender_id,
     receiverId: m.sender_id === currentUserId ? partnerId : currentUserId,
-    content: m.content ?? '',
-    timestamp: m.created_at,
-    messageType: m.message_type ?? 'text',
-    mediaUrl: m.image_url ?? undefined,
-    isEdited: m.is_edited ?? false,
-    originalContent: m.original_content ?? undefined,
-    replyToId: m.reply_to_id ?? undefined,
-    replyToContent: m.reply_to_content ?? undefined,
-    replyToSenderId: m.reply_to_sender_id ?? undefined,
-    replyToMessageType: m.reply_to_message_type ?? undefined,
+    content: m.content ?? '', timestamp: m.created_at,
+    messageType: m.message_type ?? 'text', mediaUrl: m.image_url ?? undefined,
+    isEdited: m.is_edited ?? false, originalContent: m.original_content ?? undefined,
+    replyToId: m.reply_to_id ?? undefined, replyToContent: m.reply_to_content ?? undefined,
+    replyToSenderId: m.reply_to_sender_id ?? undefined, replyToMessageType: m.reply_to_message_type ?? undefined,
   };
 }
 
-export function ChatArea({ currentUser, partner }: ChatAreaProps) {
+function formatLastSeen(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function AudioPlayer({ url }: { url: string }) {
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  const toggle = () => {
+    const a = audioRef.current; if (!a) return;
+    playing ? a.pause() : a.play(); setPlaying(!playing);
+  };
+  const handleTimeUpdate = () => {
+    const a = audioRef.current; if (!a) return;
+    setProgress((a.currentTime / a.duration) * 100 || 0);
+  };
+  const handleEnded = () => { setPlaying(false); setProgress(0); };
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = audioRef.current; if (!a || !a.duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    a.currentTime = ((e.clientX - rect.left) / rect.width) * a.duration;
+  };
+  const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const currentTime = audioRef.current?.currentTime ?? 0;
+
+  return (
+    <div className="flex items-center gap-2 min-w-[190px] py-0.5">
+      <audio ref={audioRef} src={url} onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={() => setDuration(audioRef.current?.duration ?? 0)} onEnded={handleEnded} />
+      <button onClick={toggle}
+        className="w-7 h-7 rounded-full bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 hover:bg-cyan-500/30 transition-colors flex-shrink-0">
+        {playing
+          ? <span className="w-3 h-3 flex gap-0.5 items-center justify-center"><span className="w-0.5 h-3 bg-current rounded" /><span className="w-0.5 h-3 bg-current rounded" /></span>
+          : <Play className="w-3 h-3 ml-0.5" fill="currentColor" />}
+      </button>
+      <div className="flex-1 h-1 bg-[var(--border)] rounded-full cursor-pointer" onClick={handleSeek}>
+        <div className="h-full bg-cyan-400 rounded-full transition-[width]" style={{ width: `${progress}%` }} />
+      </div>
+      <span className="text-[10px] text-[var(--txt3)] font-mono flex-shrink-0 w-8 text-right">
+        {playing ? fmt(currentTime) : fmt(duration)}
+      </span>
+    </div>
+  );
+}
+
+export function ChatArea({ currentUser, partner, onlineUserIds }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-
-  // Reactions: messageId -> emoji -> userIds[]
   const [reactions, setReactions] = useState<Record<string, ReactionsMap>>({});
   const messagesRef = useRef<Message[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -98,65 +150,57 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
   const [lightbox, setLightbox] = useState<{ url: string; type: 'image' | 'video' } | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
+  // ── NEW FEATURES ──
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [partnerLastRead, setPartnerLastRead] = useState<Date | null>(null);
+  const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
+  const [pinnedMessage, setPinnedMessage] = useState<PinnedMessage | null>(null);
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  const scrollToBottom = useCallback(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+  const scrollToBottom = useCallback(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
+  const scrollToMessage = (id: string) => {
+    const el = messageRefs.current.get(id);
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('ring-2', 'ring-cyan-500/50', 'rounded-xl'); setTimeout(() => el.classList.remove('ring-2', 'ring-cyan-500/50', 'rounded-xl'), 1500); }
+  };
 
-  // Auto-focus textarea when conversation opens or reply is triggered
-  useEffect(() => {
-    if (partner) setTimeout(() => textareaRef.current?.focus(), 120);
-  }, [partner]);
+  useEffect(() => { if (partner) setTimeout(() => textareaRef.current?.focus(), 120); }, [partner]);
+  useEffect(() => { if (replyingTo) textareaRef.current?.focus(); }, [replyingTo]);
+  useEffect(() => { if (isSearchOpen) setTimeout(() => searchInputRef.current?.focus(), 100); }, [isSearchOpen]);
 
-  useEffect(() => {
-    if (replyingTo) textareaRef.current?.focus();
-  }, [replyingTo]);
-
-  // Close emoji picker on outside click
   useEffect(() => {
     if (!emojiPickerFor) return;
-    const handler = (e: MouseEvent) => {
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
-        setEmojiPickerFor(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const h = (e: MouseEvent) => { if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) setEmojiPickerFor(null); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
   }, [emojiPickerFor]);
 
   useEffect(() => {
     if (!partner) return;
-    setLoading(true);
-    setMessages([]);
-    setReactions({});
-    setIsTyping(false);
-    setEditingId(null);
-    setReplyingTo(null);
-    setExpandedOriginals(new Set());
+    setLoading(true); setMessages([]); setReactions({}); setIsTyping(false);
+    setEditingId(null); setReplyingTo(null); setExpandedOriginals(new Set());
+    setPartnerLastRead(null); setPartnerLastSeen(null); setPinnedMessage(null);
+    setIsSearchOpen(false); setSearchQuery(''); setShowVoiceRecorder(false);
 
     const chatId = [currentUser.id, partner.id].sort().join('_');
 
-    const loadMessages = async () => {
-      const { data } = await supabase
-        .from('messages').select('*')
-        .eq('conversation_id', chatId)
-        .order('created_at', { ascending: true })
-        .limit(100);
-
+    const loadAll = async () => {
+      // Messages
+      const { data } = await supabase.from('messages').select('*')
+        .eq('conversation_id', chatId).order('created_at', { ascending: true }).limit(100);
       if (data) {
         const msgs = data.map(m => mapRow(m, currentUser.id, partner.id));
         setMessages(msgs);
-
-        // Load reactions for these messages
         if (msgs.length > 0) {
-          const { data: rxData } = await supabase
-            .from('message_reactions').select('message_id, user_id, emoji')
-            .in('message_id', msgs.map(m => m.id));
-
+          const { data: rxData } = await supabase.from('message_reactions')
+            .select('message_id, user_id, emoji').in('message_id', msgs.map(m => m.id));
           if (rxData) {
             const map: Record<string, ReactionsMap> = {};
             rxData.forEach((r: any) => {
@@ -168,77 +212,78 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
           }
         }
       }
+
+      // Partner's last read (for read receipts)
+      const { data: readData } = await supabase.from('conversation_reads')
+        .select('last_read_at').eq('user_id', partner.id).eq('conversation_id', chatId).single();
+      if (readData?.last_read_at) setPartnerLastRead(new Date(readData.last_read_at));
+
+      // Partner's last seen
+      const { data: userData } = await supabase.from('users')
+        .select('last_seen_at').eq('id', partner.id).single();
+      if (userData?.last_seen_at) setPartnerLastSeen(userData.last_seen_at);
+
+      // Pinned message
+      const { data: pinData } = await supabase.from('pinned_messages')
+        .select('*').eq('conversation_id', chatId).order('pinned_at', { ascending: false }).limit(1).single();
+      if (pinData) setPinnedMessage({
+        id: pinData.id, messageId: pinData.message_id, conversationId: pinData.conversation_id,
+        messageContent: pinData.message_content, messageType: pinData.message_type,
+        pinnedBy: pinData.pinned_by, pinnedAt: pinData.pinned_at,
+      });
+
       setLoading(false);
       setTimeout(scrollToBottom, 50);
     };
 
-    loadMessages();
+    loadAll();
 
     // Message realtime
     const msgChannel = supabase.channel(`messages:${chatId}`)
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
-        ({ new: m }) => {
-          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]);
-          setTimeout(scrollToBottom, 50);
-        })
-      .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
+        ({ new: m }) => { setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]); setTimeout(scrollToBottom, 50); })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ new: m }) => setMessages(prev => prev.map(x => x.id === m.id ? mapRow(m, currentUser.id, partner.id) : x)))
-      .on('postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ old: m }) => setMessages(prev => prev.filter(x => x.id !== m.id)))
       .subscribe();
 
-    // Reaction realtime (no filter — RLS limits results; we check msg membership ourselves)
+    // Reactions realtime
     const rxChannel = supabase.channel(`reactions:${chatId}`)
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'message_reactions' },
-        ({ new: r }) => {
-          if (!messagesRef.current.some(m => m.id === r.message_id)) return;
-          setReactions(prev => {
-            const next = { ...prev };
-            if (!next[r.message_id]) next[r.message_id] = {};
-            if (!next[r.message_id][r.emoji]) next[r.message_id][r.emoji] = [];
-            if (!next[r.message_id][r.emoji].includes(r.user_id))
-              next[r.message_id][r.emoji] = [...next[r.message_id][r.emoji], r.user_id];
-            return next;
-          });
-        })
-      .on('postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'message_reactions' },
-        ({ old: r }) => {
-          if (!messagesRef.current.some(m => m.id === r.message_id)) return;
-          setReactions(prev => {
-            const next = { ...prev };
-            if (!next[r.message_id]?.[r.emoji]) return prev;
-            const filtered = next[r.message_id][r.emoji].filter(id => id !== r.user_id);
-            if (filtered.length === 0) {
-              const { [r.emoji]: _, ...rest } = next[r.message_id];
-              next[r.message_id] = rest;
-            } else {
-              next[r.message_id][r.emoji] = filtered;
-            }
-            return next;
-          });
-        })
-      .subscribe();
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions' }, ({ new: r }) => {
+        if (!messagesRef.current.some(m => m.id === r.message_id)) return;
+        setReactions(prev => { const n = { ...prev }; if (!n[r.message_id]) n[r.message_id] = {}; if (!n[r.message_id][r.emoji]) n[r.message_id][r.emoji] = []; if (!n[r.message_id][r.emoji].includes(r.user_id)) n[r.message_id][r.emoji] = [...n[r.message_id][r.emoji], r.user_id]; return n; });
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions' }, ({ old: r }) => {
+        if (!messagesRef.current.some(m => m.id === r.message_id)) return;
+        setReactions(prev => { const n = { ...prev }; if (!n[r.message_id]?.[r.emoji]) return prev; const f = n[r.message_id][r.emoji].filter(id => id !== r.user_id); if (f.length === 0) { const { [r.emoji]: _, ...rest } = n[r.message_id]; n[r.message_id] = rest; } else { n[r.message_id][r.emoji] = f; } return n; });
+      }).subscribe();
 
-    // Typing broadcast
+    // Typing
     const typingChannel = supabase.channel(`typing:${chatId}`)
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
-        if (payload.userId === partner.id) {
-          setIsTyping(true);
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-          typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000);
-        }
+        if (payload.userId === partner.id) { setIsTyping(true); if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000); }
       }).subscribe();
     typingChannelRef.current = typingChannel;
 
+    // Read receipts realtime
+    const readsChannel = supabase.channel(`reads:${chatId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_reads' }, ({ new: r }) => {
+        if (r && r.user_id === partner.id && r.conversation_id === chatId) setPartnerLastRead(new Date(r.last_read_at));
+      }).subscribe();
+
+    // Pinned messages realtime
+    const pinChannel = supabase.channel(`pins:${chatId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pinned_messages' }, ({ new: p }) => {
+        if (p.conversation_id === chatId) setPinnedMessage({ id: p.id, messageId: p.message_id, conversationId: p.conversation_id, messageContent: p.message_content, messageType: p.message_type, pinnedBy: p.pinned_by, pinnedAt: p.pinned_at });
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'pinned_messages' }, ({ old: p }) => {
+        if (p.conversation_id === chatId) setPinnedMessage(null);
+      }).subscribe();
+
     return () => {
-      supabase.removeChannel(msgChannel);
-      supabase.removeChannel(rxChannel);
-      supabase.removeChannel(typingChannel);
+      supabase.removeChannel(msgChannel); supabase.removeChannel(rxChannel);
+      supabase.removeChannel(typingChannel); supabase.removeChannel(readsChannel); supabase.removeChannel(pinChannel);
       typingChannelRef.current = null;
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
@@ -256,11 +301,9 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
     for (const item of Array.from(e.clipboardData?.items ?? [])) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
-        const file = item.getAsFile();
-        if (!file) return;
+        const file = item.getAsFile(); if (!file) return;
         if (file.size > MAX_IMAGE_SIZE) { alert('Image must be under 8 MB'); return; }
-        setMediaFile(file); setMediaType('image'); setMediaPreview(URL.createObjectURL(file));
-        return;
+        setMediaFile(file); setMediaType('image'); setMediaPreview(URL.createObjectURL(file)); return;
       }
     }
   };
@@ -271,62 +314,35 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
     const start = el.selectionStart ?? input.length;
     const end = el.selectionEnd ?? input.length;
     const next = input.slice(0, start) + emoji + input.slice(end);
-    setInput(next);
-    setShowEmojiPicker(false);
-    setTimeout(() => {
-      el.focus();
-      el.selectionStart = el.selectionEnd = start + emoji.length;
-    }, 0);
+    setInput(next); setShowEmojiPicker(false);
+    setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = start + emoji.length; }, 0);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const file = e.target.files?.[0]; if (!file) return;
     const mt = getMediaType(file);
-    if (!mt) { alert('Unsupported file type'); return; }
+    if (!mt || mt === 'audio') { alert('Unsupported file type'); return; }
     const limit = mt === 'video' ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
     if (file.size > limit) { alert(`${mt === 'video' ? 'Video' : 'Image'} must be under ${mt === 'video' ? '80' : '8'} MB`); return; }
     setMediaFile(file); setMediaType(mt); setMediaPreview(URL.createObjectURL(file));
   };
 
-  const cancelMedia = () => {
-    setMediaFile(null); setMediaPreview(null); setMediaType(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
+  const cancelMedia = () => { setMediaFile(null); setMediaPreview(null); setMediaType(null); if (fileInputRef.current) fileInputRef.current.value = ''; };
 
   const ensureConversation = async (chatId: string) => {
     const { data } = await supabase.from('conversations').select('id').eq('id', chatId).single();
-    if (!data) await supabase.from('conversations').insert({
-      id: chatId, participants: [currentUser.id, partner!.id],
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    });
+    if (!data) await supabase.from('conversations').insert({ id: chatId, participants: [currentUser.id, partner!.id], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
   };
-
-  const bumpConversation = (chatId: string) =>
-    supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', chatId);
-
-  const buildReplyPayload = () => replyingTo ? {
-    reply_to_id: replyingTo.id,
-    reply_to_sender_id: replyingTo.senderId,
-    reply_to_message_type: replyingTo.messageType,
-    reply_to_content: replyingTo.messageType === 'text'
-      ? replyingTo.content
-      : replyingTo.messageType === 'image' ? '📷 Image' : '🎥 Video',
-  } : {};
+  const bumpConversation = (chatId: string) => supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', chatId);
+  const buildReplyPayload = () => replyingTo ? { reply_to_id: replyingTo.id, reply_to_sender_id: replyingTo.senderId, reply_to_message_type: replyingTo.messageType, reply_to_content: replyingTo.messageType === 'text' ? replyingTo.content : replyingTo.messageType === 'image' ? '📷 Image' : replyingTo.messageType === 'audio' ? '🎤 Voice' : '🎥 Video' } : {};
 
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || !partner) return;
-    const text = input.trim();
-    setInput('');
-    setReplyingTo(null);
+    const text = input.trim(); setInput(''); setReplyingTo(null);
     const chatId = [currentUser.id, partner.id].sort().join('_');
     await ensureConversation(chatId);
-    await supabase.from('messages').insert({
-      conversation_id: chatId, sender_id: currentUser.id,
-      content: text, message_type: 'text', created_at: new Date().toISOString(),
-      ...buildReplyPayload(),
-    });
+    await supabase.from('messages').insert({ conversation_id: chatId, sender_id: currentUser.id, content: text, message_type: 'text', created_at: new Date().toISOString(), ...buildReplyPayload() });
     await bumpConversation(chatId);
   };
 
@@ -341,15 +357,27 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
       const { error } = await supabase.storage.from('chat-images').upload(path, mediaFile);
       if (error) throw error;
       const { data: { publicUrl } } = supabase.storage.from('chat-images').getPublicUrl(path);
-      await supabase.from('messages').insert({
-        conversation_id: chatId, sender_id: currentUser.id,
-        content: mediaFile.name, message_type: mediaType, image_url: publicUrl,
-        created_at: new Date().toISOString(), ...buildReplyPayload(),
-      });
+      await supabase.from('messages').insert({ conversation_id: chatId, sender_id: currentUser.id, content: mediaFile.name, message_type: mediaType, image_url: publicUrl, created_at: new Date().toISOString(), ...buildReplyPayload() });
       await bumpConversation(chatId);
       cancelMedia(); setReplyingTo(null);
     } catch (err) { console.error('Upload failed:', err); }
     finally { setUploading(false); }
+  };
+
+  const handleSendVoice = async (file: File) => {
+    if (!partner) return;
+    setShowVoiceRecorder(false);
+    try {
+      const chatId = [currentUser.id, partner.id].sort().join('_');
+      await ensureConversation(chatId);
+      const path = `${chatId}/${file.name}`;
+      const { error } = await supabase.storage.from('chat-images').upload(path, file);
+      if (error) throw error;
+      const { data: { publicUrl } } = supabase.storage.from('chat-images').getPublicUrl(path);
+      await supabase.from('messages').insert({ conversation_id: chatId, sender_id: currentUser.id, content: '🎤 Voice message', message_type: 'audio', image_url: publicUrl, created_at: new Date().toISOString(), ...buildReplyPayload() });
+      await bumpConversation(chatId);
+      setReplyingTo(null);
+    } catch (err) { console.error('Voice upload failed:', err); }
   };
 
   const startEdit = (msg: Message) => { setEditingId(msg.id); setEditContent(msg.content); setTimeout(() => editInputRef.current?.focus(), 50); };
@@ -357,104 +385,172 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
   const saveEdit = async (msg: Message) => {
     const trimmed = editContent.trim();
     if (!trimmed || trimmed === msg.content) { cancelEdit(); return; }
-    await supabase.from('messages').update({
-      content: trimmed, is_edited: true,
-      original_content: msg.isEdited ? msg.originalContent : msg.content,
-    }).eq('id', msg.id);
+    await supabase.from('messages').update({ content: trimmed, is_edited: true, original_content: msg.isEdited ? msg.originalContent : msg.content }).eq('id', msg.id);
     cancelEdit();
   };
-
   const handleDelete = async (id: string) => supabase.from('messages').delete().eq('id', id);
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     const existing = reactions[msgId]?.[emoji] ?? [];
     const hasReacted = existing.includes(currentUser.id);
     setEmojiPickerFor(null);
-    if (hasReacted) {
-      await supabase.from('message_reactions').delete()
-        .eq('message_id', msgId).eq('user_id', currentUser.id).eq('emoji', emoji);
+    if (hasReacted) { await supabase.from('message_reactions').delete().eq('message_id', msgId).eq('user_id', currentUser.id).eq('emoji', emoji); }
+    else { await supabase.from('message_reactions').insert({ message_id: msgId, user_id: currentUser.id, emoji }); }
+  };
+
+  const handlePinMessage = async (msg: Message) => {
+    if (!partner) return;
+    const chatId = [currentUser.id, partner.id].sort().join('_');
+    if (pinnedMessage?.messageId === msg.id) {
+      await supabase.from('pinned_messages').delete().eq('id', pinnedMessage.id);
     } else {
-      await supabase.from('message_reactions').insert({ message_id: msgId, user_id: currentUser.id, emoji });
+      if (pinnedMessage) await supabase.from('pinned_messages').delete().eq('id', pinnedMessage.id);
+      await supabase.from('pinned_messages').insert({
+        conversation_id: chatId, message_id: msg.id,
+        message_content: msg.messageType === 'text' ? msg.content : msg.messageType === 'image' ? '📷 Image' : msg.messageType === 'audio' ? '🎤 Voice' : '🎥 Video',
+        message_type: msg.messageType, pinned_by: currentUser.id, pinned_at: new Date().toISOString(),
+      });
     }
   };
 
-  const toggleOriginal = (id: string) => {
-    setExpandedOriginals(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
-  };
+  const toggleOriginal = (id: string) => setExpandedOriginals(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
 
   const getReplyLabel = (msg: Message): string => {
     const senderName = msg.senderId === currentUser.id ? 'You' : `@${partner?.username}`;
-    const rtSelf = msg.replyToSenderId === msg.senderId;
-    const rtMe = msg.replyToSenderId === currentUser.id;
-    const rtPartner = msg.replyToSenderId === partner?.id;
-    if (rtSelf) return `${senderName} replied to ${msg.senderId === currentUser.id ? 'yourself' : 'themselves'}`;
-    if (msg.senderId === currentUser.id && rtPartner) return `You replied to @${partner?.username}`;
-    if (msg.senderId === partner?.id && rtMe) return `@${partner?.username} replied to you`;
+    if (msg.replyToSenderId === msg.senderId) return `${senderName} replied to ${msg.senderId === currentUser.id ? 'yourself' : 'themselves'}`;
+    if (msg.senderId === currentUser.id && msg.replyToSenderId === partner?.id) return `You replied to @${partner?.username}`;
+    if (msg.senderId === partner?.id && msg.replyToSenderId === currentUser.id) return `@${partner?.username} replied to you`;
     return `${senderName} replied`;
   };
 
+  const displayMessages = isSearchOpen && searchQuery.trim()
+    ? messages.filter(m => m.messageType === 'text' && m.content.toLowerCase().includes(searchQuery.toLowerCase()))
+    : messages;
+
+  const isPartnerOnline = partner ? onlineUserIds.includes(partner.id) : false;
+
   if (!partner) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-[#080808] text-[#555]">
+      <div className="flex-1 flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--txt3)]">
         <MessageSquareDashed className="w-16 h-16 mb-4 opacity-30" />
-        <h2 className="text-xl font-medium text-[#E0E0E0]">No chat selected</h2>
+        <h2 className="text-xl font-medium text-[var(--txt)]">No chat selected</h2>
         <p className="text-sm mt-2">Search for a user or pick a recent chat.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#080808] max-h-screen text-[#E0E0E0]">
+    <div className="flex-1 flex flex-col bg-[var(--bg)] max-h-screen text-[var(--txt)]">
+
       {/* Header */}
-      <div className="h-16 border-b border-[#2A2A2A] bg-[#0E0E0E] px-6 flex items-center gap-3 shrink-0">
+      <div className="h-16 border-b border-[var(--border)] bg-[var(--surface)] px-6 flex items-center gap-3 shrink-0">
         <Avatar user={partner} size="md" />
-        <div className="font-semibold">@{partner.username}</div>
-        <div className="ml-1 px-2 py-0.5 rounded bg-cyan-900/20 border border-cyan-800/40 text-[10px] text-cyan-400 font-mono">LIVE</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold truncate">@{partner.username}</div>
+          <div className="text-[10px]">
+            {isPartnerOnline
+              ? <span className="text-green-400 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-400 rounded-full inline-block" />Online</span>
+              : partnerLastSeen
+                ? <span className="text-[var(--txt3)]">Last seen {formatLastSeen(partnerLastSeen)}</span>
+                : <span className="text-[var(--txt3)]">Offline</span>
+            }
+          </div>
+        </div>
+        {!isPartnerOnline && !partnerLastSeen && (
+          <div className="ml-1 px-2 py-0.5 rounded bg-cyan-900/20 border border-cyan-800/40 text-[10px] text-cyan-400 font-mono">LIVE</div>
+        )}
+        <button onClick={() => { setIsSearchOpen(o => !o); setSearchQuery(''); }}
+          className={cn('w-8 h-8 rounded-lg border flex items-center justify-center transition-colors',
+            isSearchOpen ? 'border-cyan-700 bg-cyan-900/20 text-cyan-400' : 'border-[var(--border)] text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800')}
+          title="Search messages">
+          {isSearchOpen ? <SearchX className="w-4 h-4" /> : <Search className="w-4 h-4" />}
+        </button>
       </div>
+
+      {/* Search bar */}
+      <AnimatePresence>
+        {isSearchOpen && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-b border-[var(--border)] bg-[var(--surface)]">
+            <div className="px-4 py-2.5">
+              <input ref={searchInputRef} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search in this conversation…"
+                className="w-full bg-[var(--surface3)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-cyan-600 text-[var(--txt)] placeholder-[var(--txt3)]" />
+              {searchQuery.trim() && (
+                <div className="text-[11px] text-[var(--txt3)] mt-1.5 px-1">
+                  {displayMessages.length === 0 ? 'No messages found' : `${displayMessages.length} message${displayMessages.length !== 1 ? 's' : ''} found`}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Pinned message banner */}
+      <AnimatePresence>
+        {pinnedMessage && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-b border-[var(--border)] bg-[var(--surface)]">
+            <div className="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-[var(--surface3)] transition-colors"
+              onClick={() => scrollToMessage(pinnedMessage.messageId)}>
+              <Pin className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] text-cyan-400 font-medium leading-none mb-0.5">Pinned Message</div>
+                <div className="text-xs text-[var(--txt2)] truncate">{pinnedMessage.messageContent}</div>
+              </div>
+              <button onClick={e => { e.stopPropagation(); supabase.from('pinned_messages').delete().eq('id', pinnedMessage.id); }}
+                className="text-[var(--txt3)] hover:text-[var(--txt)] transition-colors flex-shrink-0 p-1">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6">
         {loading ? (
           <div className="flex justify-center py-8">
-            <div className="w-6 h-6 border-2 border-[#333] border-t-cyan-500 rounded-full animate-spin" />
+            <div className="w-6 h-6 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : displayMessages.length === 0 ? (
           <div className="flex flex-col items-center opacity-30 mt-20">
-            <p className="text-[#888]">Say hello to @{partner.username}!</p>
+            <p className="text-[var(--txt2)]">
+              {isSearchOpen && searchQuery ? `No messages matching "${searchQuery}"` : `Say hello to @${partner.username}!`}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col space-y-1">
-            {messages.map((msg, i) => {
+            {displayMessages.map((msg, i) => {
               const isMe = msg.senderId === currentUser.id;
-              const grouped = !msg.replyToId && messages[i - 1]?.senderId === msg.senderId && !messages[i-1]?.replyToId;
+              const grouped = !msg.replyToId && displayMessages[i - 1]?.senderId === msg.senderId && !displayMessages[i-1]?.replyToId;
               const isEditing = editingId === msg.id;
               const isHovered = hoveredId === msg.id;
               const origExpanded = expandedOriginals.has(msg.id);
               const msgReactions = reactions[msg.id] ?? {};
               const hasReactions = Object.keys(msgReactions).length > 0;
               const quotedIsMe = msg.replyToSenderId === currentUser.id;
+              const isRead = isMe && partnerLastRead && new Date(partnerLastRead) >= new Date(msg.timestamp);
+              const firstUrl = msg.messageType === 'text' && msg.content ? extractFirstUrl(msg.content) : null;
+              const isPinned = pinnedMessage?.messageId === msg.id;
 
               return (
-                <motion.div
-                  key={msg.id}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={cn('flex flex-col', grouped ? 'mt-0.5' : 'mt-5')}
-                >
+                <motion.div key={msg.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                  ref={el => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}
+                  className={cn('flex flex-col transition-all', grouped ? 'mt-0.5' : 'mt-5', isPinned ? 'bg-cyan-500/5 rounded-xl -mx-2 px-2' : '')}>
+
                   {/* Reply label */}
                   {msg.replyToId && (
-                    <div className={cn('text-[11px] text-[#555] mb-1.5 flex items-center gap-1', isMe ? 'justify-end pr-12' : 'pl-12')}>
-                      <CornerUpLeft className="w-3 h-3" />
-                      {getReplyLabel(msg)}
+                    <div className={cn('text-[11px] text-[var(--txt3)] mb-1.5 flex items-center gap-1', isMe ? 'justify-end pr-12' : 'pl-12')}>
+                      <CornerUpLeft className="w-3 h-3" />{getReplyLabel(msg)}
                     </div>
                   )}
 
-                  {/* Row: avatar + bubble + actions */}
-                  <div
-                    className={cn('flex items-end gap-2', isMe ? 'flex-row-reverse' : 'flex-row')}
+                  {/* Row */}
+                  <div className={cn('flex items-end gap-2', isMe ? 'flex-row-reverse' : 'flex-row')}
                     onMouseEnter={() => setHoveredId(msg.id)}
-                    onMouseLeave={() => { if (emojiPickerFor !== msg.id) setHoveredId(null); }}
-                  >
+                    onMouseLeave={() => { if (emojiPickerFor !== msg.id) setHoveredId(null); }}>
+
                     {/* Avatar */}
                     <div className="flex-shrink-0 self-end mb-1">
                       {grouped ? <div className="w-10 h-10" /> : <Avatar user={isMe ? currentUser : partner} size="md" isCurrentUser={isMe} />}
@@ -462,32 +558,22 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
 
                     {/* Bubble column */}
                     <div className={cn('flex flex-col max-w-[55%]', isMe ? 'items-end' : 'items-start')}>
-                      {/* Quoted bubble (reply preview) */}
+                      {/* Quoted bubble */}
                       {msg.replyToId && (
-                        <div className={cn(
-                          'px-3 py-2 rounded-xl text-xs mb-1 max-w-full border cursor-default select-none',
-                          quotedIsMe
-                            ? 'bg-cyan-950/70 border-cyan-900/40 text-cyan-100/50'
-                            : 'bg-[#141414] border-[#1E1E1E] text-[#555]'
-                        )}>
+                        <div className={cn('px-3 py-2 rounded-xl text-xs mb-1 max-w-full border cursor-default select-none',
+                          quotedIsMe ? 'bg-cyan-950/70 border-cyan-900/40 text-cyan-100/50' : 'bg-[var(--surface4)] border-[var(--border)] text-[var(--txt3)]')}>
                           {msg.replyToContent ?? '(deleted message)'}
                         </div>
                       )}
 
                       {/* Main bubble */}
                       {isEditing ? (
-                        <div className="w-full bg-[#1A1A1A] border border-cyan-700/50 rounded-xl p-3 space-y-2">
-                          <textarea
-                            ref={editInputRef} value={editContent}
-                            onChange={e => setEditContent(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(msg); }
-                              if (e.key === 'Escape') cancelEdit();
-                            }}
-                            className="w-full bg-transparent text-sm text-[#EEE] resize-none outline-none min-h-[40px]" rows={2}
-                          />
+                        <div className="w-full bg-[var(--surface3)] border border-cyan-700/50 rounded-xl p-3 space-y-2">
+                          <textarea ref={editInputRef} value={editContent} onChange={e => setEditContent(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(msg); } if (e.key === 'Escape') cancelEdit(); }}
+                            className="w-full bg-transparent text-sm text-[var(--txt)] resize-none outline-none min-h-[40px]" rows={2} />
                           <div className="flex gap-2 justify-end">
-                            <button onClick={cancelEdit} className="text-[10px] text-[#666] hover:text-[#aaa] transition-colors">Cancel</button>
+                            <button onClick={cancelEdit} className="text-[10px] text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors">Cancel</button>
                             <button onClick={() => saveEdit(msg)} className="text-[10px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-colors">
                               <Check className="w-3 h-3" /> Save
                             </button>
@@ -497,8 +583,8 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
                         <div className={cn(
                           'relative px-4 py-2.5 text-sm leading-relaxed break-words max-w-full',
                           isMe
-                            ? 'bg-cyan-950/40 border border-cyan-900/60 text-cyan-50 rounded-tl-2xl rounded-bl-2xl rounded-br-2xl'
-                            : 'bg-[#181818] border border-[#252525] text-[#E0E0E0] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl',
+                            ? 'bg-[var(--bubble-me-bg)] border border-[var(--bubble-me-border)] text-[var(--bubble-me-text)] rounded-tl-2xl rounded-bl-2xl rounded-br-2xl'
+                            : 'bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] text-[var(--txt)] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl',
                           grouped && isMe && !msg.replyToId ? 'rounded-tr-md' : '',
                           grouped && !isMe && !msg.replyToId ? 'rounded-tl-md' : '',
                         )}>
@@ -516,25 +602,26 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
                                 </div>
                               </div>
                             </div>
+                          ) : msg.messageType === 'audio' && msg.mediaUrl ? (
+                            <AudioPlayer url={msg.mediaUrl} />
                           ) : (
-                            <p className="whitespace-pre-wrap">{renderTextWithLinks(msg.content)}</p>
+                            <>
+                              <p className="whitespace-pre-wrap">{renderTextWithLinks(msg.content)}</p>
+                              {firstUrl && <LinkPreview url={firstUrl} isMe={isMe} />}
+                            </>
                           )}
                         </div>
                       )}
 
-                      {/* Reactions display */}
+                      {/* Reactions */}
                       {hasReactions && (
                         <div className={cn('flex flex-wrap gap-1 mt-1.5', isMe ? 'justify-end' : 'justify-start')}>
                           {Object.entries(msgReactions).map(([emoji, userIds]) => {
                             const mine = userIds.includes(currentUser.id);
                             return (
                               <button key={emoji} onClick={() => toggleReaction(msg.id, emoji)}
-                                className={cn(
-                                  'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all',
-                                  mine
-                                    ? 'bg-cyan-900/30 border-cyan-700/50 text-cyan-300'
-                                    : 'bg-[#1A1A1A] border-[#2A2A2A] text-[#888] hover:border-[#444]'
-                                )}>
+                                className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all',
+                                  mine ? 'bg-cyan-900/30 border-cyan-700/50 text-cyan-300' : 'bg-[var(--surface3)] border-[var(--border)] text-[var(--txt2)] hover:border-[var(--border3)]')}>
                                 <span>{emoji}</span>
                                 {userIds.length > 1 && <span className="text-[10px] font-medium">{userIds.length}</span>}
                               </button>
@@ -546,87 +633,74 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
                       {/* Edited indicator */}
                       {msg.isEdited && !isEditing && (
                         <button onClick={() => toggleOriginal(msg.id)}
-                          className="flex items-center gap-1 mt-0.5 text-[10px] text-[#555] hover:text-[#888] transition-colors">
+                          className="flex items-center gap-1 mt-0.5 text-[10px] text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors">
                           <span className="italic">edited</span>
                           <ChevronDown className={cn('w-2.5 h-2.5 transition-transform', origExpanded ? 'rotate-180' : '')} />
                         </button>
                       )}
-
                       <AnimatePresence>
                         {msg.isEdited && origExpanded && msg.originalContent && (
                           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                            <div className="mt-1 px-3 py-2 rounded-lg border border-[#2A2A2A] bg-[#111] text-[11px] text-[#555] italic max-w-full break-words">
-                              <span className="text-[#444] not-italic font-medium">Original: </span>{msg.originalContent}
+                            <div className="mt-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[11px] text-[var(--txt3)] italic max-w-full break-words">
+                              <span className="text-[var(--txt3)] not-italic font-medium">Original: </span>{msg.originalContent}
                             </div>
                           </motion.div>
                         )}
                       </AnimatePresence>
 
-                      <div className={cn('text-[10px] text-[#444] px-1 mt-0.5', isMe ? 'text-right' : '')}>
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {/* Timestamp + read receipt */}
+                      <div className={cn('flex items-center gap-1 text-[10px] text-[var(--txt4)] px-1 mt-0.5', isMe ? 'flex-row-reverse' : '')}>
+                        <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        {isMe && !isEditing && (
+                          isRead
+                            ? <CheckCheck className="w-3 h-3 text-cyan-400" />
+                            : <Check className="w-3 h-3 text-[var(--txt4)]" />
+                        )}
                       </div>
                     </div>
 
-                    {/* Hover action buttons */}
+                    {/* Hover actions */}
                     {!isEditing && (
-                      <div className={cn(
-                        'flex items-center gap-1 self-center mb-1 transition-opacity relative',
-                        isHovered || emojiPickerFor === msg.id ? 'opacity-100' : 'opacity-0 pointer-events-none'
-                      )}>
-                        {/* Emoji picker popover */}
+                      <div className={cn('flex items-center gap-1 self-center mb-1 transition-opacity relative',
+                        isHovered || emojiPickerFor === msg.id ? 'opacity-100' : 'opacity-0 pointer-events-none')}>
+                        {/* Emoji popover */}
                         {emojiPickerFor === msg.id && (
-                          <div
-                            ref={emojiPickerRef}
-                            className={cn(
-                              'absolute bottom-9 z-20 flex gap-1 p-1.5 bg-[#1E1E1E] border border-[#333] rounded-xl shadow-2xl',
-                              isMe ? 'right-0' : 'left-0'
-                            )}
-                          >
+                          <div ref={emojiPickerRef}
+                            className={cn('absolute bottom-9 z-20 flex gap-1 p-1.5 bg-[var(--surface4)] border border-[var(--border3)] rounded-xl shadow-2xl', isMe ? 'right-0' : 'left-0')}>
                             {EMOJI_SET.map(emoji => (
                               <button key={emoji} onClick={() => toggleReaction(msg.id, emoji)}
-                                className="w-8 h-8 text-lg flex items-center justify-center rounded-lg hover:bg-[#2A2A2A] transition-colors">
-                                {emoji}
-                              </button>
+                                className="w-8 h-8 text-lg flex items-center justify-center rounded-lg hover:bg-[var(--surface3)] transition-colors">{emoji}</button>
                             ))}
                           </div>
                         )}
-
                         {/* Reply */}
                         <button onClick={() => setReplyingTo(replyingTo?.id === msg.id ? null : msg)}
-                          className={cn(
-                            'w-7 h-7 rounded-md bg-[#1A1A1A] border flex items-center justify-center transition-colors',
-                            replyingTo?.id === msg.id
-                              ? 'border-cyan-700 text-cyan-400'
-                              : 'border-[#2A2A2A] text-[#666] hover:text-cyan-400 hover:border-cyan-800'
-                          )} title="Reply">
-                          <CornerUpLeft className="w-3.5 h-3.5" />
-                        </button>
-
+                          className={cn('w-7 h-7 rounded-md bg-[var(--surface3)] border flex items-center justify-center transition-colors',
+                            replyingTo?.id === msg.id ? 'border-cyan-700 text-cyan-400' : 'border-[var(--border)] text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800')}
+                          title="Reply"><CornerUpLeft className="w-3.5 h-3.5" /></button>
                         {/* React */}
                         <button onClick={() => setEmojiPickerFor(prev => prev === msg.id ? null : msg.id)}
-                          className={cn(
-                            'w-7 h-7 rounded-md bg-[#1A1A1A] border flex items-center justify-center transition-colors',
-                            emojiPickerFor === msg.id
-                              ? 'border-cyan-700 text-cyan-400'
-                              : 'border-[#2A2A2A] text-[#666] hover:text-cyan-400 hover:border-cyan-800'
-                          )} title="React">
-                          <Smile className="w-3.5 h-3.5" />
+                          className={cn('w-7 h-7 rounded-md bg-[var(--surface3)] border flex items-center justify-center transition-colors',
+                            emojiPickerFor === msg.id ? 'border-cyan-700 text-cyan-400' : 'border-[var(--border)] text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800')}
+                          title="React"><Smile className="w-3.5 h-3.5" /></button>
+                        {/* Pin */}
+                        <button onClick={() => handlePinMessage(msg)}
+                          className={cn('w-7 h-7 rounded-md bg-[var(--surface3)] border flex items-center justify-center transition-colors',
+                            pinnedMessage?.messageId === msg.id ? 'border-cyan-700 text-cyan-400' : 'border-[var(--border)] text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800')}
+                          title={pinnedMessage?.messageId === msg.id ? 'Unpin' : 'Pin message'}>
+                          {pinnedMessage?.messageId === msg.id ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
                         </button>
-
-                        {/* Edit (own text messages only) */}
+                        {/* Edit */}
                         {isMe && msg.messageType === 'text' && (
                           <button onClick={() => startEdit(msg)}
-                            className="w-7 h-7 rounded-md bg-[#1A1A1A] border border-[#2A2A2A] flex items-center justify-center text-[#666] hover:text-cyan-400 hover:border-cyan-800 transition-colors" title="Edit">
-                            <Pencil className="w-3 h-3" />
-                          </button>
+                            className="w-7 h-7 rounded-md bg-[var(--surface3)] border border-[var(--border)] flex items-center justify-center text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800 transition-colors"
+                            title="Edit"><Pencil className="w-3 h-3" /></button>
                         )}
-
-                        {/* Delete (own messages only) */}
+                        {/* Delete */}
                         {isMe && (
                           <button onClick={() => handleDelete(msg.id)}
-                            className="w-7 h-7 rounded-md bg-[#1A1A1A] border border-[#2A2A2A] flex items-center justify-center text-[#666] hover:text-red-400 hover:border-red-900 transition-colors" title="Delete">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                            className="w-7 h-7 rounded-md bg-[var(--surface3)] border border-[var(--border)] flex items-center justify-center text-[var(--txt3)] hover:text-red-400 hover:border-red-900 transition-colors"
+                            title="Delete"><Trash2 className="w-3 h-3" /></button>
                         )}
                       </div>
                     )}
@@ -639,7 +713,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
             {isTyping && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex items-end gap-2 mt-4">
                 <Avatar user={partner} size="md" />
-                <div className="px-4 py-3 bg-[#181818] border border-[#252525] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl flex gap-1.5 items-center">
+                <div className="px-4 py-3 bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl flex gap-1.5 items-center">
                   <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce [animation-delay:-0.3s]" />
                   <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce [animation-delay:-0.15s]" />
                   <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce" />
@@ -655,20 +729,18 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
       <AnimatePresence>
         {replyingTo && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-            className="px-5 pt-3 bg-[#0E0E0E] border-t border-[#2A2A2A] overflow-hidden">
-            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-[#181818] border border-[#2A2A2A]">
+            className="px-5 pt-3 bg-[var(--surface)] border-t border-[var(--border)] overflow-hidden">
+            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-[var(--surface3)] border border-[var(--border)]">
               <div className="w-0.5 self-stretch bg-cyan-500 rounded-full shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-[10px] text-cyan-400 font-medium mb-0.5">
                   Replying to {replyingTo.senderId === currentUser.id ? 'yourself' : `@${partner.username}`}
                 </div>
-                <div className="text-xs text-[#666] truncate">
-                  {replyingTo.messageType === 'image' ? '📷 Image'
-                    : replyingTo.messageType === 'video' ? '🎥 Video'
-                    : replyingTo.content}
+                <div className="text-xs text-[var(--txt3)] truncate">
+                  {replyingTo.messageType === 'image' ? '📷 Image' : replyingTo.messageType === 'video' ? '🎥 Video' : replyingTo.messageType === 'audio' ? '🎤 Voice' : replyingTo.content}
                 </div>
               </div>
-              <button onClick={() => setReplyingTo(null)} className="text-[#555] hover:text-[#aaa] transition-colors flex-shrink-0">
+              <button onClick={() => setReplyingTo(null)} className="text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors flex-shrink-0">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -680,14 +752,13 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
       <AnimatePresence>
         {mediaPreview && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-            className="px-6 pt-4 bg-[#0E0E0E] border-t border-[#2A2A2A] overflow-hidden">
+            className="px-6 pt-4 bg-[var(--surface)] border-t border-[var(--border)] overflow-hidden">
             <div className="relative inline-block">
               {mediaType === 'video'
-                ? <video src={mediaPreview} className="h-24 rounded-lg border border-[#333]" preload="metadata" />
-                : <img src={mediaPreview} alt="preview" className="h-24 rounded-lg object-cover border border-[#333]" />
-              }
-              <div className="absolute -top-0.5 left-0 bg-[#111] border border-[#333] rounded px-1.5 py-0.5 text-[9px] text-[#888] font-mono uppercase">{mediaType}</div>
-              <button onClick={cancelMedia} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[#333] border border-[#444] flex items-center justify-center text-[#aaa] hover:text-white transition-colors">
+                ? <video src={mediaPreview} className="h-24 rounded-lg border border-[var(--border3)]" preload="metadata" />
+                : <img src={mediaPreview} alt="preview" className="h-24 rounded-lg object-cover border border-[var(--border3)]" />}
+              <div className="absolute -top-0.5 left-0 bg-[var(--surface)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[9px] text-[var(--txt3)] font-mono uppercase">{mediaType}</div>
+              <button onClick={cancelMedia} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[var(--surface3)] border border-[var(--border3)] flex items-center justify-center text-[var(--txt2)] hover:text-[var(--txt)] transition-colors">
                 <X className="w-3 h-3" />
               </button>
             </div>
@@ -695,60 +766,60 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
         )}
       </AnimatePresence>
 
-      {/* Input */}
-      <footer className="p-5 bg-[#0E0E0E] border-t border-[#2A2A2A] shrink-0">
+      {/* Footer */}
+      <footer className="p-5 bg-[var(--surface)] border-t border-[var(--border)] shrink-0">
         <input ref={fileInputRef} type="file"
           accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/ogg,video/quicktime,video/x-msvideo"
           className="hidden" onChange={handleFileSelect} />
         <div className="flex items-end gap-3">
+          {/* Attach */}
           <button type="button" onClick={() => fileInputRef.current?.click()}
-            className="w-10 h-10 rounded-full bg-[#181818] border border-[#2A2A2A] flex items-center justify-center text-[#555] hover:text-cyan-400 hover:border-cyan-800 transition-colors flex-shrink-0 mb-0.5"
+            className="w-10 h-10 rounded-full bg-[var(--surface3)] border border-[var(--border)] flex items-center justify-center text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800 transition-colors flex-shrink-0 mb-0.5"
             title="Attach image or video">
             <Paperclip className="w-4 h-4" />
           </button>
 
-          {/* Emoji button + picker */}
+          {/* Emoji */}
           <div className="relative flex-shrink-0 mb-0.5">
             <button type="button" onClick={() => setShowEmojiPicker(p => !p)}
-              className={cn(
-                'w-10 h-10 rounded-full bg-[#181818] border flex items-center justify-center transition-colors',
-                showEmojiPicker
-                  ? 'border-cyan-700 text-cyan-400'
-                  : 'border-[#2A2A2A] text-[#555] hover:text-cyan-400 hover:border-cyan-800'
-              )}
-              title="Emoji">
-              <Smile className="w-4 h-4" />
-            </button>
+              className={cn('w-10 h-10 rounded-full bg-[var(--surface3)] border flex items-center justify-center transition-colors',
+                showEmojiPicker ? 'border-cyan-700 text-cyan-400' : 'border-[var(--border)] text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800')}
+              title="Emoji"><Smile className="w-4 h-4" /></button>
             <AnimatePresence>
-              {showEmojiPicker && (
-                <EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmojiPicker(false)} />
-              )}
+              {showEmojiPicker && <EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmojiPicker(false)} />}
             </AnimatePresence>
           </div>
 
-          {mediaPreview ? (
+          {/* Voice recorder or text input or send media */}
+          {showVoiceRecorder ? (
+            <VoiceRecorder onSend={handleSendVoice} onCancel={() => setShowVoiceRecorder(false)} />
+          ) : mediaPreview ? (
             <button type="button" onClick={handleSendMedia} disabled={uploading}
               className="flex-1 h-10 rounded-full bg-cyan-600 hover:bg-cyan-500 text-black text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50 transition-colors">
-              {uploading
-                ? <><div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Uploading…</>
-                : <><Send className="w-4 h-4" /> Send {mediaType === 'video' ? 'Video' : 'Image'}</>
-              }
+              {uploading ? <><div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Uploading…</> : <><Send className="w-4 h-4" /> Send {mediaType === 'video' ? 'Video' : 'Image'}</>}
             </button>
           ) : (
             <form onSubmit={handleSendText} className="flex-1 flex items-end gap-3">
-              <div className="flex-1 flex items-end bg-[#181818] border border-[#2A2A2A] rounded-2xl px-4 py-2.5 focus-within:border-cyan-700 transition-colors">
+              <div className="flex-1 flex items-end bg-[var(--input-bg)] border border-[var(--border)] rounded-2xl px-4 py-2.5 focus-within:border-cyan-700 transition-colors">
                 <textarea ref={textareaRef} value={input} onChange={handleInputChange} onPaste={handlePaste}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e as any); } }}
                   placeholder="Type a message… or paste / attach media"
-                  className="flex-1 bg-transparent outline-none text-sm placeholder-[#555] text-[#EEE] resize-none max-h-32 min-h-[20px] block w-full"
-                  rows={1}
-                />
+                  className="flex-1 bg-transparent outline-none text-sm placeholder-[var(--txt3)] text-[var(--txt)] resize-none max-h-32 min-h-[20px] block w-full" rows={1} />
               </div>
               <button type="submit" disabled={!input.trim()}
                 className="w-10 h-10 bg-cyan-600 hover:bg-cyan-500 rounded-full flex items-center justify-center text-black shadow-[0_0_15px_rgba(8,145,178,0.15)] disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0 transition-colors">
                 <Send className="w-4 h-4" />
               </button>
             </form>
+          )}
+
+          {/* Mic button — only when not in voice mode and no media */}
+          {!showVoiceRecorder && !mediaPreview && (
+            <button type="button" onClick={() => setShowVoiceRecorder(true)}
+              className="w-10 h-10 rounded-full bg-[var(--surface3)] border border-[var(--border)] flex items-center justify-center text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800 transition-colors flex-shrink-0 mb-0.5"
+              title="Record voice message">
+              <Mic className="w-4 h-4" />
+            </button>
           )}
         </div>
       </footer>
@@ -763,8 +834,7 @@ export function ChatArea({ currentUser, partner }: ChatAreaProps) {
               onClick={e => e.stopPropagation()} className="max-w-full max-h-full">
               {lightbox.type === 'video'
                 ? <video src={lightbox.url} controls autoPlay className="max-w-[90vw] max-h-[85vh] rounded-xl outline-none" />
-                : <img src={lightbox.url} alt="full" className="max-w-[90vw] max-h-[85vh] rounded-xl object-contain" />
-              }
+                : <img src={lightbox.url} alt="full" className="max-w-[90vw] max-h-[85vh] rounded-xl object-contain" />}
             </motion.div>
             <button onClick={() => setLightbox(null)}
               className="absolute top-5 right-5 w-9 h-9 rounded-full bg-[#222] border border-[#333] flex items-center justify-center text-[#aaa] hover:text-white transition-colors">
