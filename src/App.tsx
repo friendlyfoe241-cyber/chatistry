@@ -23,6 +23,32 @@ export default function App() {
 
   useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
 
+  // Keep currentUser.avatarUrl reliably in sync.
+  // fetchProfile can race against the auth session propagating to the DB, returning null data.
+  // This effect re-fetches after the user is set and subscribes to live profile changes.
+  useEffect(() => {
+    if (!user) return;
+
+    // Re-fetch in case the initial fetchProfile missed avatarUrl due to a race condition
+    supabase.from('users').select('avatar_url').eq('id', user.id).single()
+      .then(({ data }) => {
+        if (data?.avatar_url && data.avatar_url !== user.avatarUrl) {
+          setUser(prev => prev ? { ...prev, avatarUrl: data.avatar_url } : prev);
+        }
+      });
+
+    // Subscribe to realtime updates on the current user's row
+    const ch = supabase.channel(`profile-sync:${user.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${user.id}`
+      }, ({ new: row }) => {
+        setUser(prev => prev ? { ...prev, avatarUrl: (row as any).avatar_url ?? undefined } : prev);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(ch); };
+  }, [user?.id]);
+
   const fetchProfile = async (userId: string, username: string): Promise<User> => {
     const { data } = await supabase.from('users').select('avatar_url, last_seen_at').eq('id', userId).single();
     return { id: userId, username, avatarUrl: data?.avatar_url ?? undefined, lastSeenAt: data?.last_seen_at ?? undefined };
