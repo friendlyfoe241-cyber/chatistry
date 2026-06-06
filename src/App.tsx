@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User } from './types';
+import { User, UserRow, UnreadCountRow } from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -23,86 +23,137 @@ export default function App() {
 
   useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
 
-  // Keep currentUser.avatarUrl reliably in sync.
-  // fetchProfile can race against the auth session propagating to the DB, returning null data.
-  // This effect re-fetches after the user is set and subscribes to live profile changes.
+  // Keep currentUser.avatarUrl reliably in sync — guards against the race condition
+  // where fetchProfile runs before the auth session is propagated to DB queries.
   useEffect(() => {
     if (!user) return;
 
-    // Re-fetch in case the initial fetchProfile missed avatarUrl due to a race condition
     supabase.from('users').select('avatar_url').eq('id', user.id).single()
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) { console.warn('Profile re-fetch failed:', error.message); return; }
         if (data?.avatar_url && data.avatar_url !== user.avatarUrl) {
-          setUser(prev => prev ? { ...prev, avatarUrl: data.avatar_url } : prev);
+          setUser(prev => prev ? { ...prev, avatarUrl: data.avatar_url! } : prev);
         }
       });
 
-    // Subscribe to realtime updates on the current user's row
     const ch = supabase.channel(`profile-sync:${user.id}`)
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${user.id}`
       }, ({ new: row }) => {
-        setUser(prev => prev ? { ...prev, avatarUrl: (row as any).avatar_url ?? undefined } : prev);
+        const r = row as UserRow;
+        setUser(prev => prev ? { ...prev, avatarUrl: r.avatar_url ?? undefined } : prev);
       })
       .subscribe();
 
     return () => { supabase.removeChannel(ch); };
   }, [user?.id]);
 
+  // Build a User object from a DB row
+  const rowToUser = (row: UserRow): User => ({
+    id: row.id,
+    username: row.username,
+    avatarUrl: row.avatar_url ?? undefined,
+    lastSeenAt: row.last_seen_at ?? undefined,
+  });
+
   const fetchProfile = async (userId: string, username: string): Promise<User> => {
-    const { data } = await supabase.from('users').select('avatar_url, last_seen_at').eq('id', userId).single();
-    return { id: userId, username, avatarUrl: data?.avatar_url ?? undefined, lastSeenAt: data?.last_seen_at ?? undefined };
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, username, avatar_url, last_seen_at')
+      .eq('id', userId)
+      .single();
+
+    if (error || !data) {
+      console.warn('fetchProfile query failed, using auth metadata only:', error?.message);
+      return { id: userId, username };
+    }
+
+    return rowToUser(data as UserRow);
   };
 
+  // Single RPC call instead of N+1 queries per conversation.
+  // Falls back to the old loop-based approach if the RPC isn't deployed yet.
   const loadUnreadCounts = async (userId: string) => {
-    const { data: convs } = await supabase
+    const { data, error } = await supabase.rpc('get_unread_counts', { p_user_id: userId });
+
+    if (!error && data) {
+      const counts: Record<string, number> = {};
+      (data as UnreadCountRow[]).forEach(row => {
+        if (row.partner_id) counts[row.partner_id] = Number(row.unread_count);
+      });
+      setUnreadCounts(counts);
+      return;
+    }
+
+    // Fallback if RPC not yet deployed
+    console.warn('get_unread_counts RPC unavailable, using fallback:', error?.message);
+    const { data: convs, error: convErr } = await supabase
       .from('conversations').select('id, participants').contains('participants', [userId]);
+    if (convErr) { console.error('Failed to load conversations:', convErr.message); return; }
     if (!convs?.length) return;
-    const convIds = convs.map((c: any) => c.id);
-    const { data: reads } = await supabase
+
+    const convIds = (convs as { id: string; participants: string[] }[]).map(c => c.id);
+    const { data: reads, error: readsErr } = await supabase
       .from('conversation_reads').select('conversation_id, last_read_at')
       .eq('user_id', userId).in('conversation_id', convIds);
+    if (readsErr) console.warn('Failed to load reads:', readsErr.message);
+
     const readMap: Record<string, string> = {};
-    reads?.forEach((r: any) => { readMap[r.conversation_id] = r.last_read_at; });
+    (reads ?? []).forEach((r: { conversation_id: string; last_read_at: string }) => {
+      readMap[r.conversation_id] = r.last_read_at;
+    });
+
     const counts: Record<string, number> = {};
-    await Promise.all(convs.map(async (conv: any) => {
-      const partnerId = conv.participants.find((id: string) => id !== userId);
-      if (!partnerId) return;
-      const lastRead = readMap[conv.id] ?? '1970-01-01T00:00:00Z';
-      const { count } = await supabase.from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('conversation_id', conv.id).neq('sender_id', userId).gt('created_at', lastRead);
-      if (count && count > 0) counts[partnerId] = count;
-    }));
+    await Promise.all(
+      (convs as { id: string; participants: string[] }[]).map(async conv => {
+        const partnerId = conv.participants.find(id => id !== userId);
+        if (!partnerId) return;
+        const lastRead = readMap[conv.id] ?? '1970-01-01T00:00:00Z';
+        const { count, error: cErr } = await supabase.from('messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('conversation_id', conv.id).neq('sender_id', userId).gt('created_at', lastRead);
+        if (cErr) { console.warn('Failed to count messages:', cErr.message); return; }
+        if (count && count > 0) counts[partnerId] = count;
+      })
+    );
     setUnreadCounts(counts);
   };
 
   useEffect(() => {
     if (!user) return;
     const update = () => {
-      supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', user.id);
+      supabase.from('users')
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq('id', user.id)
+        .then(({ error }) => { if (error) console.warn('last_seen_at update failed:', error.message); });
     };
     window.addEventListener('beforeunload', update);
     return () => window.removeEventListener('beforeunload', update);
   }, [user?.id]);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error) { console.error('getSession failed:', error.message); setLoading(false); return; }
       if (session?.user) {
-        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
+        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username ?? '');
         setUser(profile);
         await loadUnreadCounts(session.user.id);
       }
       setLoading(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_e, session) => {
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
-        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username);
+        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username ?? '');
         setUser(profile);
         await loadUnreadCounts(session.user.id);
-      } else { setUser(null); setUnreadCounts({}); }
+      } else {
+        setUser(null);
+        setUnreadCounts({});
+      }
       setLoading(false);
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
@@ -111,10 +162,13 @@ export default function App() {
     const channel = supabase.channel('online-users');
     channel
       .on('presence', { event: 'sync' }, () => {
-        const ids = Object.values(channel.presenceState()).flat().map((p: any) => p.user_id as string);
+        const ids = Object.values(channel.presenceState()).flat().map((p: Record<string, unknown>) => p.user_id as string);
         setOnlineUserIds(ids);
       })
-      .subscribe(async status => { if (status === 'SUBSCRIBED') await channel.track({ user_id: user.id }); });
+      .subscribe(async (status, err) => {
+        if (err) { console.error('Presence subscribe error:', err); return; }
+        if (status === 'SUBSCRIBED') await channel.track({ user_id: user.id });
+      });
     presenceChannelRef.current = channel;
     return () => { supabase.removeChannel(channel); presenceChannelRef.current = null; };
   }, [user]);
@@ -127,18 +181,31 @@ export default function App() {
         const activeId = activePartnerRef.current?.id;
         const activeChatId = activeId ? [user.id, activeId].sort().join('_') : null;
         if (msg.conversation_id === activeChatId) return;
-        let sender = userCacheRef.current.get(msg.sender_id);
+
+        let sender = userCacheRef.current.get(msg.sender_id as string);
         if (!sender) {
-          const { data } = await supabase.from('users').select('id, username, avatar_url').eq('id', msg.sender_id).single();
-          if (data) { sender = { id: data.id, username: data.username, avatarUrl: data.avatar_url ?? undefined }; userCacheRef.current.set(msg.sender_id, sender); }
+          const { data, error } = await supabase
+            .from('users').select('id, username, avatar_url, last_seen_at')
+            .eq('id', msg.sender_id).single();
+          if (error) { console.warn('Failed to fetch notification sender:', error.message); return; }
+          if (data) {
+            sender = rowToUser(data as UserRow);
+            userCacheRef.current.set(msg.sender_id as string, sender);
+          }
         }
         if (!sender) return;
+
         const senderSnapshot = sender;
-        setUnreadCounts(prev => ({ ...prev, [msg.sender_id]: (prev[msg.sender_id] || 0) + 1 }));
+        setUnreadCounts(prev => ({ ...prev, [msg.sender_id as string]: (prev[msg.sender_id as string] || 0) + 1 }));
         const notifId = `${Date.now()}-${Math.random()}`;
-        setNotifications(prev => [...prev.slice(-4), { id: notifId, sender: senderSnapshot, message: msg.content ?? '', messageType: msg.message_type ?? 'text' }]);
+        setNotifications(prev => [
+          ...prev.slice(-4),
+          { id: notifId, sender: senderSnapshot, message: (msg.content as string) ?? '', messageType: (msg.message_type as string) ?? 'text' },
+        ]);
         setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notifId)), 5000);
-      }).subscribe();
+      })
+      .subscribe((_, err) => { if (err) console.error('Notification channel error:', err); });
+
     return () => supabase.removeChannel(channel);
   }, [user]);
 
@@ -146,25 +213,31 @@ export default function App() {
     setActivePartner(partner);
     setUnreadCounts(prev => ({ ...prev, [partner.id]: 0 }));
     setNotifications(prev => prev.filter(n => n.sender.id !== partner.id));
-    // On mobile, close sidebar when a chat is selected
     if (isMobile) setMobileSidebarOpen(false);
     if (user) {
       const chatId = [user.id, partner.id].sort().join('_');
-      await supabase.from('conversation_reads').upsert(
+      const { error } = await supabase.from('conversation_reads').upsert(
         { user_id: user.id, conversation_id: chatId, last_read_at: new Date().toISOString() },
         { onConflict: 'user_id,conversation_id' }
       );
+      if (error) console.warn('Failed to mark conversation as read:', error.message);
     }
   };
 
   const handleLogout = async () => {
-    if (user) await supabase.from('users').update({ last_seen_at: new Date().toISOString() }).eq('id', user.id);
+    if (user) {
+      const { error } = await supabase.from('users')
+        .update({ last_seen_at: new Date().toISOString() }).eq('id', user.id);
+      if (error) console.warn('last_seen_at on logout failed:', error.message);
+    }
     if (presenceChannelRef.current) await presenceChannelRef.current.untrack();
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error('Sign out failed:', error.message);
     setUser(null); setActivePartner(null); setUnreadCounts({});
   };
 
-  const handleAvatarUpdate = (avatarUrl: string) => setUser(prev => prev ? { ...prev, avatarUrl } : prev);
+  const handleAvatarUpdate = (avatarUrl: string) =>
+    setUser(prev => prev ? { ...prev, avatarUrl } : prev);
 
   const handleBackToSidebar = () => {
     setMobileSidebarOpen(true);
@@ -194,7 +267,6 @@ export default function App() {
         onMobileClose={() => setMobileSidebarOpen(false)}
       />
 
-      {/* On mobile: only show ChatArea when sidebar is closed */}
       {(!isMobile || !mobileSidebarOpen) && (
         <ChatArea
           currentUser={user}
