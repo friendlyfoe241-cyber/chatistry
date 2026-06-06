@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../types';
-import { Search, LogOut, Loader2, Camera, Sun, Moon, Star } from 'lucide-react';
+import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X } from 'lucide-react';
 import { cn } from '../utils';
 import { supabase } from '../supabase';
 import { Avatar } from './Avatar';
 import { useTheme } from '../context/ThemeContext';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface SidebarProps {
   currentUser: User;
@@ -14,9 +15,16 @@ interface SidebarProps {
   onlineUserIds: string[];
   onAvatarUpdate: (url: string) => void;
   unreadCounts: Record<string, number>;
+  isMobile: boolean;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
-export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout, onlineUserIds, onAvatarUpdate, unreadCounts }: SidebarProps) {
+export function Sidebar({
+  currentUser, activePartner, onSelectPartner, onLogout,
+  onlineUserIds, onAvatarUpdate, unreadCounts,
+  isMobile, mobileOpen, onMobileClose,
+}: SidebarProps) {
   const { theme, toggleTheme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
@@ -76,8 +84,7 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
   }, [searchQuery, currentUser.id]);
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const file = e.target.files?.[0]; if (!file) return;
     if (file.size > 2 * 1024 * 1024) { alert('Image must be under 2MB'); return; }
     setUploadingAvatar(true);
     try {
@@ -96,12 +103,10 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
     e.stopPropagation();
     const chatId = [currentUser.id, u.id].sort().join('_');
     if (pinnedConvoIds.has(chatId)) {
-      await supabase.from('user_pinned_conversations')
-        .delete().eq('user_id', currentUser.id).eq('conversation_id', chatId);
+      await supabase.from('user_pinned_conversations').delete().eq('user_id', currentUser.id).eq('conversation_id', chatId);
       setPinnedConvoIds(prev => { const s = new Set(prev); s.delete(chatId); return s; });
     } else {
-      await supabase.from('user_pinned_conversations')
-        .insert({ user_id: currentUser.id, conversation_id: chatId });
+      await supabase.from('user_pinned_conversations').insert({ user_id: currentUser.id, conversation_id: chatId });
       setPinnedConvoIds(prev => new Set([...prev, chatId]));
     }
   };
@@ -111,8 +116,11 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
   const unpinnedList = baseList.filter(u => !pinnedConvoIds.has([currentUser.id, u.id].sort().join('_')));
   const displayList = [...pinnedList, ...unpinnedList];
 
-  return (
-    <div className="w-72 bg-[var(--surface2)] border-r border-[var(--border)] flex flex-col h-screen shrink-0">
+  const sidebarContent = (
+    <div className={cn(
+      'flex flex-col h-full bg-[var(--surface2)]',
+      isMobile ? 'w-full' : 'w-72 border-r border-[var(--border)] shrink-0'
+    )}>
       {/* Header */}
       <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -122,7 +130,7 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
         <div className="flex items-center gap-1">
           <button onClick={toggleTheme}
             className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
-            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+            title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
           <button onClick={onLogout}
@@ -130,6 +138,14 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
             title="Sign out">
             <LogOut className="w-4 h-4" />
           </button>
+          {/* Close drawer button — mobile only */}
+          {isMobile && (
+            <button onClick={onMobileClose}
+              className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
+              title="Close menu">
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -174,7 +190,9 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
                   onMouseLeave={() => setHoveredConvoId(null)}
                   className={cn(
                     'w-full flex items-center gap-3 p-3 text-left rounded-lg transition-colors',
-                    isActive ? 'bg-[var(--surface4)] border-l-2 border-cyan-500' : 'hover:bg-[var(--surface3)] text-[var(--txt2)] hover:text-[var(--txt)]'
+                    isActive
+                      ? 'bg-[var(--surface4)] border-l-2 border-cyan-500'
+                      : 'hover:bg-[var(--surface3)] text-[var(--txt2)] hover:text-[var(--txt)]'
                   )}
                 >
                   <div className="relative flex-shrink-0">
@@ -195,7 +213,6 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
                     </div>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    {/* Star/pin button — visible on hover */}
                     {(isHov || isPinned) && unread === 0 && (
                       <button
                         onClick={e => togglePinConvo(e, u)}
@@ -242,4 +259,40 @@ export function Sidebar({ currentUser, activePartner, onSelectPartner, onLogout,
       </div>
     </div>
   );
+
+  // Mobile: full-screen slide-in drawer with backdrop
+  if (isMobile) {
+    return (
+      <AnimatePresence>
+        {mobileOpen && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              key="backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+              onClick={onMobileClose}
+            />
+            {/* Drawer */}
+            <motion.div
+              key="drawer"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+              className="fixed top-0 left-0 bottom-0 z-50 w-[85vw] max-w-sm shadow-2xl"
+            >
+              {sidebarContent}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    );
+  }
+
+  // Desktop: static sidebar
+  return sidebarContent;
 }

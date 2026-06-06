@@ -3,7 +3,7 @@ import { User, Message, ReactionsMap, PinnedMessage } from '../types';
 import {
   Send, MessageSquareDashed, Paperclip, X,
   Pencil, Trash2, Check, CheckCheck, ChevronDown, Play, CornerUpLeft, Smile,
-  Search, SearchX, Mic, Pin, PinOff,
+  Search, SearchX, Mic, Pin, PinOff, ArrowLeft,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
@@ -17,6 +17,7 @@ interface ChatAreaProps {
   currentUser: User;
   partner: User | null;
   onlineUserIds: string[];
+  onBackToSidebar?: () => void;
 }
 
 const EMOJI_SET = ['❤️', '👍', '😂', '😮', '😢', '😡', '🔥', '👏'];
@@ -117,7 +118,7 @@ function AudioPlayer({ url }: { url: string }) {
   );
 }
 
-export function ChatArea({ currentUser, partner, onlineUserIds }: ChatAreaProps) {
+export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [input, setInput] = useState('');
@@ -432,9 +433,21 @@ export function ChatArea({ currentUser, partner, onlineUserIds }: ChatAreaProps)
   if (!partner) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--txt3)]">
+        {onBackToSidebar && (
+          <button onClick={onBackToSidebar}
+            className="absolute top-5 left-5 flex items-center gap-2 text-sm text-[var(--txt2)] hover:text-[var(--txt)] transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Chats
+          </button>
+        )}
         <MessageSquareDashed className="w-16 h-16 mb-4 opacity-30" />
         <h2 className="text-xl font-medium text-[var(--txt)]">No chat selected</h2>
-        <p className="text-sm mt-2">Search for a user or pick a recent chat.</p>
+        <p className="text-sm mt-2 text-center px-6">Search for a user or pick a recent chat.</p>
+        {onBackToSidebar && (
+          <button onClick={onBackToSidebar}
+            className="mt-6 px-5 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-black text-sm font-medium transition-colors">
+            Open Chat List
+          </button>
+        )}
       </div>
     );
   }
@@ -443,7 +456,15 @@ export function ChatArea({ currentUser, partner, onlineUserIds }: ChatAreaProps)
     <div className="flex-1 flex flex-col bg-[var(--bg)] max-h-screen text-[var(--txt)]">
 
       {/* Header */}
-      <div className="h-16 border-b border-[var(--border)] bg-[var(--surface)] px-6 flex items-center gap-3 shrink-0">
+      <div className="h-16 border-b border-[var(--border)] bg-[var(--surface)] px-4 flex items-center gap-3 shrink-0">
+        {/* Back button — mobile only */}
+        {onBackToSidebar && (
+          <button onClick={onBackToSidebar}
+            className="w-8 h-8 -ml-1 rounded-lg flex items-center justify-center text-[var(--txt2)] hover:text-[var(--txt)] hover:bg-[var(--surface3)] transition-colors flex-shrink-0"
+            title="Back to chats">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        )}
         <Avatar user={partner} size="md" />
         <div className="flex-1 min-w-0">
           <div className="font-semibold truncate">@{partner.username}</div>
@@ -460,7 +481,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds }: ChatAreaProps)
           <div className="ml-1 px-2 py-0.5 rounded bg-cyan-900/20 border border-cyan-800/40 text-[10px] text-cyan-400 font-mono">LIVE</div>
         )}
         <button onClick={() => { setIsSearchOpen(o => !o); setSearchQuery(''); }}
-          className={cn('w-8 h-8 rounded-lg border flex items-center justify-center transition-colors',
+          className={cn('w-8 h-8 rounded-lg border flex items-center justify-center transition-colors flex-shrink-0',
             isSearchOpen ? 'border-cyan-700 bg-cyan-900/20 text-cyan-400' : 'border-[var(--border)] text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800')}
           title="Search messages">
           {isSearchOpen ? <SearchX className="w-4 h-4" /> : <Search className="w-4 h-4" />}
@@ -767,7 +788,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds }: ChatAreaProps)
       </AnimatePresence>
 
       {/* Footer */}
-      <footer className="p-5 bg-[var(--surface)] border-t border-[var(--border)] shrink-0">
+      <footer className="p-3 md:p-5 bg-[var(--surface)] border-t border-[var(--border)] shrink-0">
         <input ref={fileInputRef} type="file"
           accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/ogg,video/quicktime,video/x-msvideo"
           className="hidden" onChange={handleFileSelect} />

@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { Notifications, NotificationItem } from './components/Notifications';
 import { supabase } from './supabase';
+import { useIsMobile } from './hooks/useIsMobile';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -13,7 +14,9 @@ export default function App() {
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(true);
 
+  const isMobile = useIsMobile();
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const activePartnerRef = useRef<User | null>(null);
   const userCacheRef = useRef<Map<string, User>>(new Map());
@@ -48,7 +51,6 @@ export default function App() {
     setUnreadCounts(counts);
   };
 
-  // Update last_seen_at on page unload
   useEffect(() => {
     if (!user) return;
     const update = () => {
@@ -79,10 +81,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) {
-      if (presenceChannelRef.current) { supabase.removeChannel(presenceChannelRef.current); presenceChannelRef.current = null; }
-      return;
-    }
+    if (!user) return;
     const channel = supabase.channel('online-users');
     channel
       .on('presence', { event: 'sync' }, () => {
@@ -121,6 +120,8 @@ export default function App() {
     setActivePartner(partner);
     setUnreadCounts(prev => ({ ...prev, [partner.id]: 0 }));
     setNotifications(prev => prev.filter(n => n.sender.id !== partner.id));
+    // On mobile, close sidebar when a chat is selected
+    if (isMobile) setMobileSidebarOpen(false);
     if (user) {
       const chatId = [user.id, partner.id].sort().join('_');
       await supabase.from('conversation_reads').upsert(
@@ -139,6 +140,11 @@ export default function App() {
 
   const handleAvatarUpdate = (avatarUrl: string) => setUser(prev => prev ? { ...prev, avatarUrl } : prev);
 
+  const handleBackToSidebar = () => {
+    setMobileSidebarOpen(true);
+    setActivePartner(null);
+  };
+
   if (loading) return (
     <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
       <div className="w-8 h-8 border-4 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
@@ -150,11 +156,28 @@ export default function App() {
   return (
     <div className="flex h-screen bg-[var(--bg)] overflow-hidden font-sans text-[var(--txt)]">
       <Sidebar
-        currentUser={user} activePartner={activePartner}
-        onSelectPartner={handleSelectPartner} onLogout={handleLogout}
-        onlineUserIds={onlineUserIds} onAvatarUpdate={handleAvatarUpdate} unreadCounts={unreadCounts}
+        currentUser={user}
+        activePartner={activePartner}
+        onSelectPartner={handleSelectPartner}
+        onLogout={handleLogout}
+        onlineUserIds={onlineUserIds}
+        onAvatarUpdate={handleAvatarUpdate}
+        unreadCounts={unreadCounts}
+        isMobile={isMobile}
+        mobileOpen={mobileSidebarOpen}
+        onMobileClose={() => setMobileSidebarOpen(false)}
       />
-      <ChatArea currentUser={user} partner={activePartner} onlineUserIds={onlineUserIds} />
+
+      {/* On mobile: only show ChatArea when sidebar is closed */}
+      {(!isMobile || !mobileSidebarOpen) && (
+        <ChatArea
+          currentUser={user}
+          partner={activePartner}
+          onlineUserIds={onlineUserIds}
+          onBackToSidebar={isMobile ? handleBackToSidebar : undefined}
+        />
+      )}
+
       <Notifications
         items={notifications}
         onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}
