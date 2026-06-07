@@ -55,6 +55,57 @@ function renderTextWithLinks(text: string): React.ReactNode[] {
   return nodes;
 }
 
+// ── #1 Image compression — resize to max 1200px before upload ──
+async function compressImage(file: File, maxDimension = 1200, quality = 0.82): Promise<File> {
+  if (!ACCEPTED_IMAGE.includes(file.type) || file.type === 'image/gif') return file;
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => {
+        if (!blob) { resolve(file); return; }
+        const out = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+        resolve(out.size < file.size ? out : file);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+// ── #2 Notification sound via Web Audio API — no file needed ──
+function playNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1046, ctx.currentTime);           // C6
+    osc.frequency.exponentialRampToValueAtTime(1318, ctx.currentTime + 0.07); // E6
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.35);
+    setTimeout(() => ctx.close(), 500);
+  } catch { /* AudioContext blocked — silently ignore */ }
+}
+
+// ── #5 Reaction tooltip — format reactor names ──
+function formatReactors(userIds: string[], currentUserId: string, partnerUsername: string): string {
+  const names = userIds.map(id =>
+    id === currentUserId ? 'You' : `@${partnerUsername}`
+  );
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
 function mapRow(m: any, currentUserId: string, partnerId: string): Message {
   return {
     id: m.id, senderId: m.sender_id,
@@ -161,6 +212,20 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // ── #3 New messages jump button ──
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [newMsgCount, setNewMsgCount] = useState(0);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current; if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+    if (atBottom) setNewMsgCount(0);
+  }, []);
+
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -189,6 +254,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     setEditingId(null); setReplyingTo(null); setExpandedOriginals(new Set());
     setPartnerLastRead(null); setPartnerLastSeen(null); setPinnedMessage(null);
     setIsSearchOpen(false); setSearchQuery(''); setShowVoiceRecorder(false);
+    setNewMsgCount(0); isAtBottomRef.current = true; setIsAtBottom(true);
 
     const chatId = [currentUser.id, partner.id].sort().join('_');
 
@@ -242,7 +308,13 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     // Message realtime
     const msgChannel = supabase.channel(`messages:${chatId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
-        ({ new: m }) => { setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]); setTimeout(scrollToBottom, 50); })
+        ({ new: m }) => {
+          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]);
+          if (m.sender_id !== currentUser.id) {
+            playNotificationSound();
+            if (!isAtBottomRef.current) setNewMsgCount(prev => prev + 1);
+          }
+        })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ new: m }) => setMessages(prev => prev.map(x => x.id === m.id ? mapRow(m, currentUser.id, partner.id) : x)))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
@@ -290,7 +362,17 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     };
   }, [partner, currentUser.id, scrollToBottom]);
 
-  useEffect(() => { scrollToBottom(); }, [messages, isTyping]);
+  // Auto-scroll: always on own messages, only if at bottom for partner messages
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return;
+    if (last.senderId === currentUser.id || isAtBottomRef.current) {
+      scrollToBottom();
+      setNewMsgCount(0);
+    }
+  }, [messages]);
+
+  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(); }, [isTyping]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -298,12 +380,13 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
       typingChannelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUser.id } });
   };
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     for (const item of Array.from(e.clipboardData?.items ?? [])) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
-        const file = item.getAsFile(); if (!file) return;
+        let file = item.getAsFile(); if (!file) return;
         if (file.size > MAX_IMAGE_SIZE) { alert('Image must be under 8 MB'); return; }
+        file = await compressImage(file);
         setMediaFile(file); setMediaType('image'); setMediaPreview(URL.createObjectURL(file)); return;
       }
     }
@@ -319,12 +402,13 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = start + emoji.length; }, 0);
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    let file = e.target.files?.[0]; if (!file) return;
     const mt = getMediaType(file);
     if (!mt || mt === 'audio') { alert('Unsupported file type'); return; }
     const limit = mt === 'video' ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
     if (file.size > limit) { alert(`${mt === 'video' ? 'Video' : 'Image'} must be under ${mt === 'video' ? '80' : '8'} MB`); return; }
+    if (mt === 'image') file = await compressImage(file);
     setMediaFile(file); setMediaType(mt); setMediaPreview(URL.createObjectURL(file));
   };
 
@@ -529,7 +613,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
       </AnimatePresence>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-6 relative">
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="w-6 h-6 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
@@ -639,8 +723,11 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                         <div className={cn('flex flex-wrap gap-1 mt-1.5', isMe ? 'justify-end' : 'justify-start')}>
                           {Object.entries(msgReactions).map(([emoji, userIds]) => {
                             const mine = userIds.includes(currentUser.id);
+                            const tooltip = formatReactors(userIds, currentUser.id, partner.username);
                             return (
                               <button key={emoji} onClick={() => toggleReaction(msg.id, emoji)}
+                                title={tooltip}
+                                aria-label={`${emoji} reaction — ${tooltip}`}
                                 className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all',
                                   mine ? 'bg-cyan-900/30 border-cyan-700/50 text-cyan-300' : 'bg-[var(--surface3)] border-[var(--border)] text-[var(--txt2)] hover:border-[var(--border3)]')}>
                                 <span>{emoji}</span>
@@ -743,6 +830,21 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
             )}
           </div>
         )}
+        {/* ── #3 New messages jump button ── */}
+        <AnimatePresence>
+          {newMsgCount > 0 && !isAtBottom && (
+            <motion.button
+              initial={{ opacity: 0, y: 8, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+              onClick={() => { scrollToBottom(); setNewMsgCount(0); }}
+              className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-black text-xs font-semibold rounded-full shadow-lg shadow-cyan-900/40 transition-colors z-10 mx-auto w-fit"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+              {newMsgCount} new message{newMsgCount !== 1 ? 's' : ''}
+            </motion.button>
+          )}
+        </AnimatePresence>
         <div ref={endRef} />
       </div>
 
