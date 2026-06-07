@@ -3,7 +3,7 @@ import { User, Message, ReactionsMap, PinnedMessage } from '../types';
 import {
   Send, MessageSquareDashed, Paperclip, X,
   Pencil, Trash2, Check, CheckCheck, ChevronDown, Play, CornerUpLeft, Smile,
-  Search, SearchX, Mic, Pin, PinOff, ArrowLeft, Forward,
+  Search, SearchX, Mic, Pin, PinOff, ArrowLeft,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
@@ -12,9 +12,6 @@ import { Avatar } from './Avatar';
 import { EmojiPicker } from './EmojiPicker';
 import { VoiceRecorder } from './VoiceRecorder';
 import { LinkPreview } from './LinkPreview';
-import { ForwardModal } from './ForwardModal';
-
-const PAGE_SIZE = 50;
 
 interface ChatAreaProps {
   currentUser: User;
@@ -56,57 +53,6 @@ function renderTextWithLinks(text: string): React.ReactNode[] {
   }
   if (last < text.length) nodes.push(<span key={last}>{text.slice(last)}</span>);
   return nodes;
-}
-
-// ── #1 Image compression — resize to max 1200px before upload ──
-async function compressImage(file: File, maxDimension = 1200, quality = 0.82): Promise<File> {
-  if (!ACCEPTED_IMAGE.includes(file.type) || file.type === 'image/gif') return file;
-  return new Promise(resolve => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(blob => {
-        if (!blob) { resolve(file); return; }
-        const out = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
-        resolve(out.size < file.size ? out : file);
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
-    img.src = url;
-  });
-}
-
-// ── #2 Notification sound via Web Audio API — no file needed ──
-function playNotificationSound() {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(1046, ctx.currentTime);           // C6
-    osc.frequency.exponentialRampToValueAtTime(1318, ctx.currentTime + 0.07); // E6
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.35);
-    setTimeout(() => ctx.close(), 500);
-  } catch { /* AudioContext blocked — silently ignore */ }
-}
-
-// ── #5 Reaction tooltip — format reactor names ──
-function formatReactors(userIds: string[], currentUserId: string, partnerUsername: string): string {
-  const names = userIds.map(id =>
-    id === currentUserId ? 'You' : `@${partnerUsername}`
-  );
-  if (names.length === 1) return names[0];
-  if (names.length === 2) return `${names[0]} and ${names[1]}`;
-  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 function mapRow(m: any, currentUserId: string, partnerId: string): Message {
@@ -215,54 +161,6 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Forwarding
-  const [forwardingMsg, setForwardingMsg] = useState<Message | null>(null);
-
-  // Unread divider
-  const [firstUnreadId, setFirstUnreadId] = useState<string | null>(null);
-
-  // Pagination
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const hasMoreRef = useRef(false);
-  const loadingMoreRef = useRef(false);
-  const oldestTimestampRef = useRef<string | null>(null);
-
-  // ── #3 New messages jump button ──
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isAtBottomRef = useRef(true);
-  const [isAtBottom, setIsAtBottom] = useState(true);
-  const [newMsgCount, setNewMsgCount] = useState(0);
-
-  const loadMore = useCallback(async () => {
-    if (!partner || loadingMoreRef.current || !hasMoreRef.current) return;
-    loadingMoreRef.current = true;
-    setLoadingMore(true);
-    const chatId = [currentUser.id, partner.id].sort().join('_');
-    const { data } = await supabase.from('messages').select('*')
-      .eq('conversation_id', chatId)
-      .lt('created_at', oldestTimestampRef.current!)
-      .order('created_at', { ascending: false }).limit(PAGE_SIZE);
-    if (data) {
-      const older = data.reverse().map(m => mapRow(m, currentUser.id, partner.id));
-      setMessages(prev => [...older, ...prev]);
-      hasMoreRef.current = data.length === PAGE_SIZE;
-      setHasMore(data.length === PAGE_SIZE);
-      if (older.length > 0) oldestTimestampRef.current = older[0].timestamp;
-    }
-    loadingMoreRef.current = false;
-    setLoadingMore(false);
-  }, [partner, currentUser.id]);
-
-  const handleScroll = useCallback(() => {
-    const el = scrollContainerRef.current; if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    isAtBottomRef.current = atBottom;
-    setIsAtBottom(atBottom);
-    if (atBottom) setNewMsgCount(0);
-    if (el.scrollTop < 80) loadMore();
-  }, [loadMore]);
-
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -291,32 +189,16 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     setEditingId(null); setReplyingTo(null); setExpandedOriginals(new Set());
     setPartnerLastRead(null); setPartnerLastSeen(null); setPinnedMessage(null);
     setIsSearchOpen(false); setSearchQuery(''); setShowVoiceRecorder(false);
-    setNewMsgCount(0); isAtBottomRef.current = true; setIsAtBottom(true);
-    setFirstUnreadId(null); setHasMore(false); setLoadingMore(false);
-    hasMoreRef.current = false; loadingMoreRef.current = false; oldestTimestampRef.current = null;
 
     const chatId = [currentUser.id, partner.id].sort().join('_');
 
     const loadAll = async () => {
-      // Messages — load newest PAGE_SIZE, descending then reverse
+      // Messages
       const { data } = await supabase.from('messages').select('*')
-        .eq('conversation_id', chatId).order('created_at', { ascending: false }).limit(PAGE_SIZE);
+        .eq('conversation_id', chatId).order('created_at', { ascending: true }).limit(100);
       if (data) {
-        const msgs = data.reverse().map(m => mapRow(m, currentUser.id, partner.id));
+        const msgs = data.map(m => mapRow(m, currentUser.id, partner.id));
         setMessages(msgs);
-        hasMoreRef.current = data.length === PAGE_SIZE;
-        setHasMore(data.length === PAGE_SIZE);
-        if (msgs.length > 0) oldestTimestampRef.current = msgs[0].timestamp;
-
-        // Unread divider: find first partner message after my last read
-        const { data: myRead } = await supabase.from('conversation_reads')
-          .select('last_read_at').eq('user_id', currentUser.id).eq('conversation_id', chatId).maybeSingle();
-        if (myRead?.last_read_at) {
-          const cutoff = new Date(myRead.last_read_at);
-          const first = msgs.find(m => m.senderId !== currentUser.id && new Date(m.timestamp) > cutoff);
-          setFirstUnreadId(first?.id ?? null);
-        }
-
         if (msgs.length > 0) {
           const { data: rxData } = await supabase.from('message_reactions')
             .select('message_id, user_id, emoji').in('message_id', msgs.map(m => m.id));
@@ -360,13 +242,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     // Message realtime
     const msgChannel = supabase.channel(`messages:${chatId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
-        ({ new: m }) => {
-          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]);
-          if (m.sender_id !== currentUser.id) {
-            playNotificationSound();
-            if (!isAtBottomRef.current) setNewMsgCount(prev => prev + 1);
-          }
-        })
+        ({ new: m }) => { setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]); setTimeout(scrollToBottom, 50); })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ new: m }) => setMessages(prev => prev.map(x => x.id === m.id ? mapRow(m, currentUser.id, partner.id) : x)))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
@@ -414,17 +290,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     };
   }, [partner, currentUser.id, scrollToBottom]);
 
-  // Auto-scroll: always on own messages, only if at bottom for partner messages
-  useEffect(() => {
-    const last = messages[messages.length - 1];
-    if (!last) return;
-    if (last.senderId === currentUser.id || isAtBottomRef.current) {
-      scrollToBottom();
-      setNewMsgCount(0);
-    }
-  }, [messages]);
-
-  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(); }, [isTyping]);
+  useEffect(() => { scrollToBottom(); }, [messages, isTyping]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -432,13 +298,12 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
       typingChannelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUser.id } });
   };
 
-  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     for (const item of Array.from(e.clipboardData?.items ?? [])) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
-        let file = item.getAsFile(); if (!file) return;
+        const file = item.getAsFile(); if (!file) return;
         if (file.size > MAX_IMAGE_SIZE) { alert('Image must be under 8 MB'); return; }
-        file = await compressImage(file);
         setMediaFile(file); setMediaType('image'); setMediaPreview(URL.createObjectURL(file)); return;
       }
     }
@@ -454,13 +319,12 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = start + emoji.length; }, 0);
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    let file = e.target.files?.[0]; if (!file) return;
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
     const mt = getMediaType(file);
     if (!mt || mt === 'audio') { alert('Unsupported file type'); return; }
     const limit = mt === 'video' ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
     if (file.size > limit) { alert(`${mt === 'video' ? 'Video' : 'Image'} must be under ${mt === 'video' ? '80' : '8'} MB`); return; }
-    if (mt === 'image') file = await compressImage(file);
     setMediaFile(file); setMediaType(mt); setMediaPreview(URL.createObjectURL(file));
   };
 
@@ -603,18 +467,14 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
         )}
         <Avatar user={partner} size="md" />
         <div className="flex-1 min-w-0">
-          <div className="font-semibold truncate">{partner.displayName || `@${partner.username}`}</div>
-          <div className="text-[10px] flex items-center gap-1.5 flex-wrap">
-            {partner.displayName && <span className="text-[var(--txt3)]">@{partner.username}</span>}
-            {(partner.statusEmoji || partner.statusText) && (
-              <span className="text-[var(--txt3)]">{partner.statusEmoji} {partner.statusText}</span>
-            )}
-            {!partner.statusText && (isPartnerOnline
+          <div className="font-semibold truncate">@{partner.username}</div>
+          <div className="text-[10px]">
+            {isPartnerOnline
               ? <span className="text-green-400 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-400 rounded-full inline-block" />Online</span>
               : partnerLastSeen
                 ? <span className="text-[var(--txt3)]">Last seen {formatLastSeen(partnerLastSeen)}</span>
                 : <span className="text-[var(--txt3)]">Offline</span>
-            )}
+            }
           </div>
         </div>
         {!isPartnerOnline && !partnerLastSeen && (
@@ -669,7 +529,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
       </AnimatePresence>
 
       {/* Messages */}
-      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-6 relative">
+      <div className="flex-1 overflow-y-auto p-6">
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="w-6 h-6 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
@@ -682,18 +542,6 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
           </div>
         ) : (
           <div className="flex flex-col space-y-1">
-            {/* Load more indicator */}
-            {loadingMore && (
-              <div className="flex justify-center py-3">
-                <div className="w-4 h-4 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
-              </div>
-            )}
-            {hasMore && !loadingMore && (
-              <button onClick={loadMore}
-                className="text-xs text-[var(--txt3)] hover:text-cyan-400 transition-colors py-2 text-center">
-                Load earlier messages
-              </button>
-            )}
             {displayMessages.map((msg, i) => {
               const isMe = msg.senderId === currentUser.id;
               const grouped = !msg.replyToId && displayMessages[i - 1]?.senderId === msg.senderId && !displayMessages[i-1]?.replyToId;
@@ -711,15 +559,6 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                 <motion.div key={msg.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                   ref={el => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}
                   className={cn('flex flex-col transition-all', grouped ? 'mt-0.5' : 'mt-5', isPinned ? 'bg-cyan-500/5 rounded-xl -mx-2 px-2' : '')}>
-
-                  {/* Unread divider */}
-                  {firstUnreadId === msg.id && (
-                    <div className="flex items-center gap-3 my-3 -mx-1">
-                      <div className="flex-1 h-px bg-red-500/25" />
-                      <span className="text-[10px] text-red-400 font-semibold uppercase tracking-wide whitespace-nowrap">New Messages</span>
-                      <div className="flex-1 h-px bg-red-500/25" />
-                    </div>
-                  )}
 
                   {/* Reply label */}
                   {msg.replyToId && (
@@ -800,11 +639,8 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                         <div className={cn('flex flex-wrap gap-1 mt-1.5', isMe ? 'justify-end' : 'justify-start')}>
                           {Object.entries(msgReactions).map(([emoji, userIds]) => {
                             const mine = userIds.includes(currentUser.id);
-                            const tooltip = formatReactors(userIds, currentUser.id, partner.username);
                             return (
                               <button key={emoji} onClick={() => toggleReaction(msg.id, emoji)}
-                                title={tooltip}
-                                aria-label={`${emoji} reaction — ${tooltip}`}
                                 className={cn('flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all',
                                   mine ? 'bg-cyan-900/30 border-cyan-700/50 text-cyan-300' : 'bg-[var(--surface3)] border-[var(--border)] text-[var(--txt2)] hover:border-[var(--border3)]')}>
                                 <span>{emoji}</span>
@@ -858,10 +694,6 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                             ))}
                           </div>
                         )}
-                        {/* Forward */}
-                        <button onClick={() => setForwardingMsg(msg)}
-                          className="w-7 h-7 rounded-md bg-[var(--surface3)] border border-[var(--border)] flex items-center justify-center text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800 transition-colors"
-                          title="Forward message"><Forward className="w-3.5 h-3.5" /></button>
                         {/* Reply */}
                         <button onClick={() => setReplyingTo(replyingTo?.id === msg.id ? null : msg)}
                           className={cn('w-7 h-7 rounded-md bg-[var(--surface3)] border flex items-center justify-center transition-colors',
@@ -911,21 +743,6 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
             )}
           </div>
         )}
-        {/* ── #3 New messages jump button ── */}
-        <AnimatePresence>
-          {newMsgCount > 0 && !isAtBottom && (
-            <motion.button
-              initial={{ opacity: 0, y: 8, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.95 }}
-              onClick={() => { scrollToBottom(); setNewMsgCount(0); }}
-              className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-black text-xs font-semibold rounded-full shadow-lg shadow-cyan-900/40 transition-colors z-10 mx-auto w-fit"
-            >
-              <ChevronDown className="w-3.5 h-3.5" />
-              {newMsgCount} new message{newMsgCount !== 1 ? 's' : ''}
-            </motion.button>
-          )}
-        </AnimatePresence>
         <div ref={endRef} />
       </div>
 
@@ -1027,18 +844,6 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
           )}
         </div>
       </footer>
-
-      {/* Forward modal */}
-      <AnimatePresence>
-        {forwardingMsg && (
-          <ForwardModal
-            message={forwardingMsg}
-            currentUser={currentUser}
-            currentPartnerId={partner.id}
-            onClose={() => setForwardingMsg(null)}
-          />
-        )}
-      </AnimatePresence>
 
       {/* Lightbox */}
       <AnimatePresence>
