@@ -5,7 +5,6 @@ import { LandingPage } from './components/LandingPage';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { Notifications, NotificationItem } from './components/Notifications';
-import { ErrorBoundary } from './components/ErrorBoundary';
 import { supabase } from './supabase';
 import { useIsMobile } from './hooks/useIsMobile';
 
@@ -61,17 +60,14 @@ export default function App() {
   const rowToUser = (row: UserRow): User => ({
     id: row.id,
     username: row.username,
-    displayName: row.display_name ?? undefined,
     avatarUrl: row.avatar_url ?? undefined,
     lastSeenAt: row.last_seen_at ?? undefined,
-    statusEmoji: row.status_emoji ?? undefined,
-    statusText: row.status_text ?? undefined,
   });
 
   const fetchProfile = async (userId: string, username: string): Promise<User> => {
     const { data, error } = await supabase
       .from('users')
-      .select('id, username, display_name, avatar_url, last_seen_at, status_emoji, status_text')
+      .select('id, username, avatar_url, last_seen_at')
       .eq('id', userId)
       .single();
 
@@ -143,14 +139,6 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', update);
   }, [user?.id]);
 
-  // Request push notification permission when user logs in
-  useEffect(() => {
-    if (!user) return;
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }, [user?.id]);
-
   // Single source of truth for auth — onAuthStateChange fires as INITIAL_SESSION
   // on page load, so getSession is redundant and causes a double fetchProfile race.
   useEffect(() => {
@@ -208,18 +196,6 @@ export default function App() {
 
         const senderSnapshot = sender;
         setUnreadCounts(prev => ({ ...prev, [msg.sender_id as string]: (prev[msg.sender_id as string] || 0) + 1 }));
-
-        // Browser push notification when tab is not focused
-        if ('Notification' in window && Notification.permission === 'granted' && !document.hasFocus()) {
-          const body = msg.message_type === 'image' ? '📷 Image'
-            : msg.message_type === 'audio' ? '🎤 Voice message'
-            : msg.message_type === 'video' ? '🎥 Video'
-            : (msg.content as string) ?? '';
-          new Notification(senderSnapshot.displayName || `@${senderSnapshot.username}`, {
-            body, icon: senderSnapshot.avatarUrl || '/logo.png', badge: '/logo.png',
-            tag: senderSnapshot.id,
-          });
-        }
         const notifId = `${Date.now()}-${Math.random()}`;
         setNotifications(prev => [
           ...prev.slice(-4),
@@ -284,34 +260,34 @@ export default function App() {
   }
 
   return (
-    <ErrorBoundary>
-      <div className="flex h-screen bg-[var(--bg)] overflow-hidden font-sans text-[var(--txt)]">
-        <Sidebar
+    <div className="flex h-screen bg-[var(--bg)] overflow-hidden font-sans text-[var(--txt)]">
+      <Sidebar
+        currentUser={user}
+        activePartner={activePartner}
+        onSelectPartner={handleSelectPartner}
+        onLogout={handleLogout}
+        onlineUserIds={onlineUserIds}
+        onAvatarUpdate={handleAvatarUpdate}
+        unreadCounts={unreadCounts}
+        isMobile={isMobile}
+        mobileOpen={mobileSidebarOpen}
+        onMobileClose={() => setMobileSidebarOpen(false)}
+      />
+
+      {(!isMobile || !mobileSidebarOpen) && (
+        <ChatArea
           currentUser={user}
-          activePartner={activePartner}
-          onSelectPartner={handleSelectPartner}
-          onLogout={handleLogout}
+          partner={activePartner}
           onlineUserIds={onlineUserIds}
-          onAvatarUpdate={handleAvatarUpdate}
-          unreadCounts={unreadCounts}
-          isMobile={isMobile}
-          mobileOpen={mobileSidebarOpen}
-          onMobileClose={() => setMobileSidebarOpen(false)}
+          onBackToSidebar={isMobile ? handleBackToSidebar : undefined}
         />
-        {(!isMobile || !mobileSidebarOpen) && (
-          <ChatArea
-            currentUser={user}
-            partner={activePartner}
-            onlineUserIds={onlineUserIds}
-            onBackToSidebar={isMobile ? handleBackToSidebar : undefined}
-          />
-        )}
-        <Notifications
-          items={notifications}
-          onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}
-          onOpen={sender => handleSelectPartner(sender)}
-        />
-      </div>
-    </ErrorBoundary>
+      )}
+
+      <Notifications
+        items={notifications}
+        onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}
+        onOpen={sender => handleSelectPartner(sender)}
+      />
+    </div>
   );
 }

@@ -1,12 +1,9 @@
-// ── App-level models ─────────────────────────────────────────────
+// ── App-level models ────────────────────────────────────────────
 export interface User {
   id: string;
-  username: string;       // login handle (unique, lowercase)
-  displayName?: string;   // shown name (not unique, free text)
+  username: string;
   avatarUrl?: string;
   lastSeenAt?: string;
-  statusEmoji?: string;
-  statusText?: string;
 }
 
 export interface Message {
@@ -37,15 +34,12 @@ export interface PinnedMessage {
   pinnedAt: string;
 }
 
-// ── Database row shapes ──────────────────────────────────────────
+// ── Database row shapes (replaces `any` in Supabase queries) ────
 export interface UserRow {
   id: string;
   username: string;
-  display_name: string | null;
   avatar_url: string | null;
   last_seen_at: string | null;
-  status_emoji: string | null;
-  status_text: string | null;
 }
 
 export interface MessageRow {

@@ -33,15 +33,7 @@ export function Sidebar({
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [pinnedConvoIds, setPinnedConvoIds] = useState<Set<string>>(new Set());
   const [hoveredConvoId, setHoveredConvoId] = useState<string | null>(null);
-  const [editingStatus, setEditingStatus] = useState(false);
-  const [statusEmoji, setStatusEmoji] = useState(currentUser.statusEmoji ?? '');
-  const [statusText, setStatusText] = useState(currentUser.statusText ?? '');
   const avatarInputRef = useRef<HTMLInputElement>(null);
-
-  const saveStatus = async () => {
-    setEditingStatus(false);
-    await supabase.from('users').update({ status_emoji: statusEmoji.trim(), status_text: statusText.trim() }).eq('id', currentUser.id);
-  };
 
   const fetchRecentChats = async () => {
     const { data: convs } = await supabase
@@ -56,11 +48,8 @@ export function Sidebar({
       });
       if (ids.size) {
         const { data: users } = await supabase
-          .from('users').select('id, username, display_name, avatar_url, status_emoji, status_text').in('id', Array.from(ids).slice(0, 20));
-        if (users) setRecentChats(users.map((u: any) => ({
-            id: u.id, username: u.username, displayName: u.display_name ?? undefined,
-            avatarUrl: u.avatar_url ?? undefined, statusEmoji: u.status_emoji ?? undefined, statusText: u.status_text ?? undefined,
-          })));
+          .from('users').select('id, username, avatar_url').in('id', Array.from(ids).slice(0, 20));
+        if (users) setRecentChats(users.map((u: any) => ({ id: u.id, username: u.username, avatarUrl: u.avatar_url ?? undefined })));
       }
     }
   };
@@ -86,12 +75,9 @@ export function Sidebar({
     const t = setTimeout(async () => {
       try {
         const { data } = await supabase
-          .from('users').select('id, username, display_name, avatar_url, status_emoji, status_text')
-          .or(`username.ilike.%${searchQuery}%,display_name.ilike.%${searchQuery}%`).neq('id', currentUser.id).limit(10);
-        setSearchResults((data ?? []).map((u: any) => ({
-          id: u.id, username: u.username, displayName: u.display_name ?? undefined,
-          avatarUrl: u.avatar_url ?? undefined, statusEmoji: u.status_emoji ?? undefined, statusText: u.status_text ?? undefined,
-        })));
+          .from('users').select('id, username, avatar_url')
+          .ilike('username', `%${searchQuery}%`).neq('id', currentUser.id).limit(10);
+        setSearchResults((data ?? []).map((u: any) => ({ id: u.id, username: u.username, avatarUrl: u.avatar_url ?? undefined })));
       } finally { setIsSearching(false); }
     }, 400);
     return () => clearTimeout(t);
@@ -218,19 +204,13 @@ export function Sidebar({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <h4 className={cn('text-sm font-semibold truncate', isActive ? 'text-[var(--txt)]' : '')}>
-                        {u.displayName || `@${u.username}`}
+                        @{u.username}
                       </h4>
                       {isPinned && <Star className="w-3 h-3 text-yellow-400 fill-yellow-400 flex-shrink-0" />}
                     </div>
                     <div className="text-[10px] text-[var(--txt3)]">
-                      {u.displayName && <span className="text-[var(--txt3)]">@{u.username} · </span>}
                       {isOnline ? <span className="text-green-400">Online</span> : 'Offline'}
                     </div>
-                    {(u.statusEmoji || u.statusText) && (
-                      <div className="text-[10px] text-[var(--txt3)] truncate mt-0.5">
-                        {u.statusEmoji} {u.statusText}
-                      </div>
-                    )}
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {(isHov || isPinned) && unread === 0 && (
@@ -270,30 +250,10 @@ export function Sidebar({
             </button>
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold text-[var(--txt)] truncate">
-              {currentUser.displayName || `@${currentUser.username}`}
+            <div className="text-xs font-semibold text-[var(--txt)] truncate">@{currentUser.username}</div>
+            <div className="text-[10px] text-[var(--txt3)] flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 bg-green-500 rounded-full shadow-[0_0_4px_rgba(34,197,94,0.6)]" /> Online
             </div>
-            {currentUser.displayName && (
-              <div className="text-[10px] text-[var(--txt3)]">@{currentUser.username}</div>
-            )}
-            {editingStatus ? (
-              <div className="flex items-center gap-1 mt-1">
-                <input value={statusEmoji} onChange={e => setStatusEmoji(e.target.value)} placeholder="😊"
-                  className="w-8 bg-[var(--surface4)] border border-[var(--border2)] rounded px-1 py-0.5 text-xs text-center focus:outline-none focus:border-cyan-700" maxLength={2} />
-                <input value={statusText} onChange={e => setStatusText(e.target.value)} placeholder="Set a status…"
-                  onKeyDown={e => { if (e.key === 'Enter') saveStatus(); if (e.key === 'Escape') setEditingStatus(false); }}
-                  className="flex-1 min-w-0 bg-[var(--surface4)] border border-[var(--border2)] rounded px-1.5 py-0.5 text-xs text-[var(--txt)] focus:outline-none focus:border-cyan-700" maxLength={40} />
-                <button onClick={saveStatus} className="text-cyan-400 hover:text-cyan-300 text-[10px] font-medium px-1">Save</button>
-              </div>
-            ) : (
-              <button onClick={() => setEditingStatus(true)}
-                className="text-[10px] text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors flex items-center gap-1 mt-0.5 max-w-full">
-                {statusEmoji || currentUser.statusEmoji
-                  ? <span>{statusEmoji || currentUser.statusEmoji} {statusText || currentUser.statusText || <span className="italic opacity-60">Edit status</span>}</span>
-                  : <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-500 rounded-full" />Online · click to set status</span>
-                }
-              </button>
-            )}
           </div>
         </div>
       </div>
