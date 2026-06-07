@@ -51,21 +51,35 @@ export function Sidebar({
       .from('conversations').select('id, participants, updated_at')
       .contains('participants', [currentUser.id])
       .order('updated_at', { ascending: false });
-    if (convs?.length) {
-      const ids = new Set<string>();
-      convs.forEach((c: any) => {
-        const pid = c.participants.find((id: string) => id !== currentUser.id);
-        if (pid) ids.add(pid);
-      });
-      if (ids.size) {
-        const { data: users } = await supabase
-          .from('users').select('id, username, display_name, avatar_url, status_emoji, status_text').in('id', Array.from(ids).slice(0, 20));
-        if (users) setRecentChats(users.map((u: any) => ({
-            id: u.id, username: u.username, displayName: u.display_name ?? undefined,
-            avatarUrl: u.avatar_url ?? undefined, statusEmoji: u.status_emoji ?? undefined, statusText: u.status_text ?? undefined,
-          })));
-      }
+    if (!convs?.length) return;
+
+    // Preserve the conversation order (most recent first) while deduplicating
+    const orderedPartnerIds: string[] = [];
+    const seen = new Set<string>();
+    for (const c of convs as { id: string; participants: string[]; updated_at: string }[]) {
+      const pid = c.participants.find(id => id !== currentUser.id);
+      if (pid && !seen.has(pid)) { orderedPartnerIds.push(pid); seen.add(pid); }
     }
+    if (!orderedPartnerIds.length) return;
+
+    const { data: users } = await supabase
+      .from('users').select('id, username, display_name, avatar_url, status_emoji, status_text')
+      .in('id', orderedPartnerIds.slice(0, 20));
+    if (!users) return;
+
+    // Re-sort fetched users back into conversation order (IN query doesn't preserve order)
+    const userMap = new Map(users.map((u: any) => [u.id, u]));
+    const sorted = orderedPartnerIds
+      .filter(id => userMap.has(id))
+      .map(id => {
+        const u = userMap.get(id)!;
+        return {
+          id: u.id, username: u.username, displayName: u.display_name ?? undefined,
+          avatarUrl: u.avatar_url ?? undefined, statusEmoji: u.status_emoji ?? undefined,
+          statusText: u.status_text ?? undefined,
+        };
+      });
+    setRecentChats(sorted);
   };
 
   const loadPinnedConvos = async () => {
