@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../types';
-import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X } from 'lucide-react';
+import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X, Smile } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
 import { supabase } from '../supabase';
 import { Avatar } from './Avatar';
 import { useTheme } from '../context/ThemeContext';
+import { EmojiPicker } from './EmojiPicker';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface SidebarProps {
@@ -36,6 +38,7 @@ export function Sidebar({
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusEmoji, setStatusEmoji] = useState(currentUser.statusEmoji ?? '');
   const [statusText, setStatusText] = useState(currentUser.statusText ?? '');
+  const [showStatusEmojiPicker, setShowStatusEmojiPicker] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const saveStatus = async () => {
@@ -277,21 +280,75 @@ export function Sidebar({
               <div className="text-[10px] text-[var(--txt3)]">@{currentUser.username}</div>
             )}
             {editingStatus ? (
-              <div className="flex items-center gap-1 mt-1">
-                <input value={statusEmoji} onChange={e => setStatusEmoji(e.target.value)} placeholder="😊"
-                  className="w-8 bg-[var(--surface4)] border border-[var(--border2)] rounded px-1 py-0.5 text-xs text-center focus:outline-none focus:border-cyan-700" maxLength={2} />
-                <input value={statusText} onChange={e => setStatusText(e.target.value)} placeholder="Set a status…"
-                  onKeyDown={e => { if (e.key === 'Enter') saveStatus(); if (e.key === 'Escape') setEditingStatus(false); }}
-                  className="flex-1 min-w-0 bg-[var(--surface4)] border border-[var(--border2)] rounded px-1.5 py-0.5 text-xs text-[var(--txt)] focus:outline-none focus:border-cyan-700" maxLength={40} />
-                <button onClick={saveStatus} className="text-cyan-400 hover:text-cyan-300 text-[10px] font-medium px-1">Save</button>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  {/* Emoji picker button */}
+                  <div className="relative flex-shrink-0">
+                    <button
+                      onClick={() => setShowStatusEmojiPicker(p => !p)}
+                      className="w-8 h-8 bg-[var(--surface4)] border border-[var(--border2)] rounded-lg flex items-center justify-center hover:bg-[var(--surface3)] hover:border-[var(--border3)] transition-colors"
+                      title="Pick emoji"
+                    >
+                      {statusEmoji
+                        ? <span className="text-base leading-none">{statusEmoji}</span>
+                        : <Smile className="w-4 h-4 text-[var(--txt3)]" />}
+                    </button>
+                    <AnimatePresence>
+                      {showStatusEmojiPicker && (
+                        <div className="absolute bottom-full mb-2 left-0 z-50">
+                          <EmojiPicker
+                            onSelect={emoji => { setStatusEmoji(emoji); setShowStatusEmojiPicker(false); }}
+                            onClose={() => setShowStatusEmojiPicker(false)}
+                          />
+                        </div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  <input
+                    value={statusText}
+                    onChange={e => setStatusText(e.target.value)}
+                    placeholder="Set a status…"
+                    onKeyDown={e => { if (e.key === 'Enter') saveStatus(); if (e.key === 'Escape') { setEditingStatus(false); setShowStatusEmojiPicker(false); } }}
+                    className="flex-1 min-w-0 bg-[var(--surface4)] border border-[var(--border2)] rounded-lg px-2 py-1.5 text-xs text-[var(--txt)] placeholder-[var(--txt3)] focus:outline-none focus:border-cyan-700 transition-colors"
+                    maxLength={40}
+                    autoFocus
+                  />
+                </div>
+                <div className="flex items-center justify-between px-0.5">
+                  <button onClick={() => { setStatusEmoji(''); setStatusText(''); }}
+                    className="text-[10px] text-[var(--txt3)] hover:text-red-400 transition-colors">
+                    Clear status
+                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setEditingStatus(false); setShowStatusEmojiPicker(false); }}
+                      className="text-[10px] text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors">
+                      Cancel
+                    </button>
+                    <button onClick={saveStatus}
+                      className="text-[10px] text-cyan-400 hover:text-cyan-300 font-medium transition-colors">
+                      Save
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
-              <button onClick={() => setEditingStatus(true)}
-                className="text-[10px] text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors flex items-center gap-1 mt-0.5 max-w-full">
-                {statusEmoji || currentUser.statusEmoji
-                  ? <span>{statusEmoji || currentUser.statusEmoji} {statusText || currentUser.statusText || <span className="italic opacity-60">Edit status</span>}</span>
-                  : <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-500 rounded-full" />Online · click to set status</span>
-                }
+              <button
+                onClick={() => setEditingStatus(true)}
+                className="mt-1 w-full text-left flex items-center gap-1.5 group"
+              >
+                {(statusEmoji || statusText) ? (
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {statusEmoji && <span className="text-sm leading-none flex-shrink-0">{statusEmoji}</span>}
+                    <span className="text-[11px] text-[var(--txt2)] truncate group-hover:text-[var(--txt)] transition-colors">
+                      {statusText || <span className="italic text-[var(--txt3)]">Edit status</span>}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-[var(--txt3)] group-hover:text-[var(--txt2)] transition-colors flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full flex-shrink-0 shadow-[0_0_4px_rgba(34,197,94,0.6)]" />
+                    Online · <span className="underline underline-offset-2 decoration-dotted">set a status</span>
+                  </span>
+                )}
               </button>
             )}
           </div>

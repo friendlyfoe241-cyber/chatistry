@@ -539,7 +539,10 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     if (!partner) return;
     const chatId = [currentUser.id, partner.id].sort().join('_');
     if (pinnedMessage?.messageId === msg.id) {
-      await supabase.from('pinned_messages').delete().eq('id', pinnedMessage.id);
+      // Optimistic update first — don't wait for realtime
+      const id = pinnedMessage.id;
+      setPinnedMessage(null);
+      await supabase.from('pinned_messages').delete().eq('id', id);
     } else {
       if (pinnedMessage) await supabase.from('pinned_messages').delete().eq('id', pinnedMessage.id);
       await supabase.from('pinned_messages').insert({
@@ -659,7 +662,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                 <div className="text-[10px] text-cyan-400 font-medium leading-none mb-0.5">Pinned Message</div>
                 <div className="text-xs text-[var(--txt2)] truncate">{pinnedMessage.messageContent}</div>
               </div>
-              <button onClick={e => { e.stopPropagation(); supabase.from('pinned_messages').delete().eq('id', pinnedMessage.id); }}
+              <button onClick={e => { e.stopPropagation(); const id = pinnedMessage.id; setPinnedMessage(null); supabase.from('pinned_messages').delete().eq('id', id); }}
                 className="text-[var(--txt3)] hover:text-[var(--txt)] transition-colors flex-shrink-0 p-1">
                 <X className="w-3 h-3" />
               </button>
