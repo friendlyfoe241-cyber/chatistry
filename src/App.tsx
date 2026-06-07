@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, UserRow, UnreadCountRow } from './types';
 import { AuthScreen } from './components/AuthScreen';
+import { LandingPage } from './components/LandingPage';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { Notifications, NotificationItem } from './components/Notifications';
@@ -15,6 +16,7 @@ export default function App() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(true);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | null>(null);
 
   const isMobile = useIsMobile();
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -23,18 +25,24 @@ export default function App() {
 
   useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
 
-  // Keep currentUser.avatarUrl reliably in sync — guards against the race condition
-  // where fetchProfile runs before the auth session is propagated to DB queries.
+  // Keep currentUser.avatarUrl reliably in sync.
+  // Retries with backoff to handle the window where the auth session
+  // hasn't fully propagated to the DB client yet on initial load.
   useEffect(() => {
     if (!user) return;
 
-    supabase.from('users').select('avatar_url').eq('id', user.id).single()
-      .then(({ data, error }) => {
-        if (error) { console.warn('Profile re-fetch failed:', error.message); return; }
-        if (data?.avatar_url && data.avatar_url !== user.avatarUrl) {
-          setUser(prev => prev ? { ...prev, avatarUrl: data.avatar_url! } : prev);
+    const fetchAvatarWithRetry = async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 350 * attempt));
+        const { data } = await supabase.from('users').select('avatar_url').eq('id', user.id).single();
+        if (data?.avatar_url) {
+          if (data.avatar_url !== user.avatarUrl)
+            setUser(prev => prev ? { ...prev, avatarUrl: data.avatar_url! } : prev);
+          return;
         }
-      });
+      }
+    };
+    fetchAvatarWithRetry();
 
     const ch = supabase.channel(`profile-sync:${user.id}`)
       .on('postgres_changes', {
@@ -131,17 +139,9 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', update);
   }, [user?.id]);
 
+  // Single source of truth for auth — onAuthStateChange fires as INITIAL_SESSION
+  // on page load, so getSession is redundant and causes a double fetchProfile race.
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
-      if (error) { console.error('getSession failed:', error.message); setLoading(false); return; }
-      if (session?.user) {
-        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username ?? '');
-        setUser(profile);
-        await loadUnreadCounts(session.user.id);
-      }
-      setLoading(false);
-    });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         const profile = await fetchProfile(session.user.id, session.user.user_metadata.username ?? '');
@@ -153,7 +153,6 @@ export default function App() {
       }
       setLoading(false);
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
@@ -250,7 +249,15 @@ export default function App() {
     </div>
   );
 
-  if (!user) return <AuthScreen />;
+  if (!user) {
+    if (authMode) return <AuthScreen initialMode={authMode} onBack={() => setAuthMode(null)} />;
+    return (
+      <LandingPage
+        onSignIn={() => setAuthMode('signin')}
+        onSignUp={() => setAuthMode('signup')}
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen bg-[var(--bg)] overflow-hidden font-sans text-[var(--txt)]">

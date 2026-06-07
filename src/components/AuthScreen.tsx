@@ -4,8 +4,8 @@ import { Eye, EyeOff, ArrowRight, Loader2 } from 'lucide-react';
 import { supabase } from '../supabase';
 import { cn } from '../utils';
 
-export function AuthScreen() {
-  const [isLogin, setIsLogin] = useState(true);
+export function AuthScreen({ initialMode = 'signin', onBack }: { initialMode?: 'signin' | 'signup'; onBack?: () => void }) {
+  const [isLogin, setIsLogin] = useState(initialMode === 'signin');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -40,6 +40,13 @@ export function AuthScreen() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center p-4 overflow-hidden relative">
+      {onBack && (
+        <button onClick={onBack}
+          className="absolute top-5 left-5 flex items-center gap-1.5 text-sm text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors z-10">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          Back
+        </button>
+      )}
 
       {/* Animated background orbs */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
