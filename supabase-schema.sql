@@ -193,3 +193,64 @@ CREATE POLICY IF NOT EXISTS "Users manage pinned convos" ON public.user_pinned_c
 -- Storage bucket for voice messages (reuses chat-images bucket)
 -- Voice messages are stored under the chat-images bucket as audio files.
 -- (already covered by existing chat-images policies)
+
+-- ================================================================
+-- MIGRATION: get_unread_counts RPC — eliminates N+1 query problem
+-- Replaces the per-conversation message count loop in App.tsx with
+-- a single database call.
+-- ================================================================
+
+CREATE OR REPLACE FUNCTION get_unread_counts(p_user_id uuid)
+RETURNS TABLE(partner_id text, unread_count bigint)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT
+    (SELECT p FROM unnest(c.participants) p WHERE p <> p_user_id::text LIMIT 1) AS partner_id,
+    COUNT(m.id)::bigint AS unread_count
+  FROM conversations c
+  JOIN messages m ON m.conversation_id = c.id
+  LEFT JOIN conversation_reads cr
+    ON cr.conversation_id = c.id AND cr.user_id = p_user_id
+  WHERE
+    p_user_id::text = ANY(c.participants)
+    AND m.sender_id <> p_user_id
+    AND m.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
+  GROUP BY c.id, c.participants
+  HAVING COUNT(m.id) > 0;
+$$;
+
+-- Grant execution to authenticated users
+GRANT EXECUTE ON FUNCTION get_unread_counts(uuid) TO authenticated;
+
+-- ================================================================
+-- MIGRATION: display names, status, and rate limiting
+-- ================================================================
+
+-- Display name (shown to others, not unique)
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS display_name text;
+
+-- Status (emoji + text)
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS status_emoji text NOT NULL DEFAULT '';
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS status_text  text NOT NULL DEFAULT '';
+
+-- Rate limiting: max 30 messages per user per minute
+CREATE OR REPLACE FUNCTION enforce_rate_limit()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (
+    SELECT COUNT(*) FROM messages
+    WHERE sender_id = NEW.sender_id
+      AND created_at > NOW() - INTERVAL '1 minute'
+  ) >= 30 THEN
+    RAISE EXCEPTION 'Rate limit exceeded — max 30 messages per minute.';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS messages_rate_limit ON public.messages;
+CREATE TRIGGER messages_rate_limit
+  BEFORE INSERT ON public.messages
+  FOR EACH ROW EXECUTE FUNCTION enforce_rate_limit();
