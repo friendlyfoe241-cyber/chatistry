@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { cn } from '../utils';
 import { User } from '../types';
 
@@ -17,6 +17,11 @@ const sizes = {
 
 export function Avatar({ user, size = 'md', className, isCurrentUser }: AvatarProps) {
   const [imgError, setImgError] = useState(false);
+
+  // Reset error state whenever the URL changes so a new/updated avatar always loads
+  useEffect(() => {
+    setImgError(false);
+  }, [user.avatarUrl]);
 
   const base = cn(
     'rounded-full flex-shrink-0 flex items-center justify-center font-bold border',

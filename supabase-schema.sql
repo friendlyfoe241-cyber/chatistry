@@ -193,3 +193,33 @@ CREATE POLICY IF NOT EXISTS "Users manage pinned convos" ON public.user_pinned_c
 -- Storage bucket for voice messages (reuses chat-images bucket)
 -- Voice messages are stored under the chat-images bucket as audio files.
 -- (already covered by existing chat-images policies)
+
+-- ================================================================
+-- MIGRATION: get_unread_counts RPC — eliminates N+1 query problem
+-- Replaces the per-conversation message count loop in App.tsx with
+-- a single database call.
+-- ================================================================
+
+CREATE OR REPLACE FUNCTION get_unread_counts(p_user_id uuid)
+RETURNS TABLE(partner_id text, unread_count bigint)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT
+    (SELECT p FROM unnest(c.participants) p WHERE p <> p_user_id::text LIMIT 1) AS partner_id,
+    COUNT(m.id)::bigint AS unread_count
+  FROM conversations c
+  JOIN messages m ON m.conversation_id = c.id
+  LEFT JOIN conversation_reads cr
+    ON cr.conversation_id = c.id AND cr.user_id = p_user_id
+  WHERE
+    p_user_id::text = ANY(c.participants)
+    AND m.sender_id <> p_user_id
+    AND m.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
+  GROUP BY c.id, c.participants
+  HAVING COUNT(m.id) > 0;
+$$;
+
+-- Grant execution to authenticated users
+GRANT EXECUTE ON FUNCTION get_unread_counts(uuid) TO authenticated;
