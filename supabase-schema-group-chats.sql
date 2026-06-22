@@ -84,7 +84,7 @@ CREATE POLICY "Group members can update themselves" ON public.group_members
 -- 4. Update conversation RLS policies for group chats
 CREATE POLICY "Users can view DM conversations" ON public.conversations
   FOR SELECT USING (
-    (is_group IS NULL OR is_group = false) AND auth.uid()::text = ANY(participants)
+    (is_group IS NULL OR is_group = false) AND auth.uid() = ANY(participants)
   );
 
 CREATE POLICY "Users can view group chats they're members of" ON public.conversations
@@ -93,7 +93,7 @@ CREATE POLICY "Users can view group chats they're members of" ON public.conversa
     EXISTS (
       SELECT 1 FROM public.group_members gm
       WHERE gm.conversation_id = public.conversations.id
-      AND gm.user_id::text = auth.uid()::text
+      AND gm.user_id = auth.uid()
     )
   );
 
@@ -103,7 +103,7 @@ CREATE POLICY "Users can update group chats they belong to" ON public.conversati
     EXISTS (
       SELECT 1 FROM public.group_members gm
       WHERE gm.conversation_id = public.conversations.id
-      AND gm.user_id::text = auth.uid()::text
+      AND gm.user_id = auth.uid()
       AND gm.role = 'admin'
     )
   );
