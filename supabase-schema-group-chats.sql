@@ -27,7 +27,10 @@ DO $$ BEGIN
   DROP POLICY IF EXISTS "Users can view group chats they're members of" ON public.conversations;
   DROP POLICY IF EXISTS "Users can update group chats they belong to" ON public.conversations;
   DROP POLICY IF EXISTS "Users can update their conversations" ON public.conversations;
-  DROP POLICY IF EXISTS "Users can view DM conversations" ON public.conversations;
+  DROP POLICY IF EXISTS "Users can view their conversations" ON public.conversations;
+  DROP POLICY IF EXISTS "Users can insert conversations" ON public.conversations;
+  DROP POLICY IF EXISTS "Users can view messages in their conversations" ON public.messages;
+  DROP POLICY IF EXISTS "Users can insert messages in their conversations" ON public.messages;
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 
@@ -82,22 +85,25 @@ CREATE POLICY "Group members can update themselves" ON public.group_members
   );
 
 -- 4. Update conversation RLS policies for group chats
-CREATE POLICY "Users can view DM conversations" ON public.conversations
+-- For viewing: allow if user is participant (DMs) or member (groups)
+CREATE POLICY "Users can view their conversations" ON public.conversations
   FOR SELECT USING (
-    (is_group IS NULL OR is_group = false) AND auth.uid() = ANY(participants)
-  );
-
-CREATE POLICY "Users can view group chats they're members of" ON public.conversations
-  FOR SELECT USING (
-    is_group = true AND
-    EXISTS (
+    auth.uid() = ANY(participants) OR
+    (is_group = true AND EXISTS (
       SELECT 1 FROM public.group_members gm
       WHERE gm.conversation_id = public.conversations.id
       AND gm.user_id = auth.uid()
-    )
+    ))
   );
 
-CREATE POLICY "Users can update group chats they belong to" ON public.conversations
+-- For inserting: allow if user is a participant (DMs) or creating a group
+CREATE POLICY "Users can insert conversations" ON public.conversations
+  FOR INSERT WITH CHECK (
+    auth.uid() = ANY(participants)
+  );
+
+-- For updating: allow if admin of group
+CREATE POLICY "Users can update their conversations" ON public.conversations
   FOR UPDATE USING (
     is_group = true AND
     EXISTS (
@@ -108,7 +114,21 @@ CREATE POLICY "Users can update group chats they belong to" ON public.conversati
     )
   );
 
--- 5. RPC Functions
+-- 5. Add messages policy for group chats
+CREATE POLICY "Users can view messages in their conversations" ON public.messages
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM public.conversations c
+      WHERE c.id = messages.conversation_id AND auth.uid() = ANY(c.participants))
+  );
+
+CREATE POLICY "Users can insert messages in their conversations" ON public.messages
+  FOR INSERT WITH CHECK (
+    auth.uid() = sender_id AND
+    EXISTS (SELECT 1 FROM public.conversations c
+      WHERE c.id = messages.conversation_id AND auth.uid() = ANY(c.participants))
+  );
+
+-- 6. RPC Functions
 
 -- Create a group conversation
 CREATE FUNCTION public.create_group_conversation(
