@@ -96,3 +96,22 @@ export interface UnreadCountRow {
   partner_id: string;
   unread_count: number;
 }
+
+// ── Group Chat types ────────────────────────────────────────────
+export interface GroupChat {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  participants: string[];
+  updatedAt: string;
+  memberCount?: number;
+}
+
+export interface GroupMember {
+  userId: string;
+  username: string;
+  displayName?: string;
+  avatarUrl?: string;
+  role: 'admin' | 'member';
+  joinedAt: string;
+}

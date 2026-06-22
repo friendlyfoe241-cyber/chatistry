@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User } from '../types';
-import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X, Smile } from 'lucide-react';
+import { User, GroupChat } from '../types';
+import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X, Smile, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
 import { supabase } from '../supabase';
 import { Avatar } from './Avatar';
 import { useTheme } from '../context/ThemeContext';
 import { EmojiPicker } from './EmojiPicker';
-import { motion, AnimatePresence } from 'motion/react';
+import { CreateGroupModal } from './CreateGroupModal';
 
 interface SidebarProps {
   currentUser: User;
   activePartner: User | null;
+  activeGroup: GroupChat | null;
   onSelectPartner: (user: User) => void;
+  onSelectGroup: (group: GroupChat) => void;
   onLogout: () => void;
   onlineUserIds: string[];
   onAvatarUpdate: (url: string) => void;
@@ -23,7 +25,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  currentUser, activePartner, onSelectPartner, onLogout,
+  currentUser, activePartner, activeGroup, onSelectPartner, onSelectGroup, onLogout,
   onlineUserIds, onAvatarUpdate, unreadCounts,
   isMobile, mobileOpen, onMobileClose,
 }: SidebarProps) {
@@ -31,6 +33,7 @@ export function Sidebar({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
   const [recentChats, setRecentChats] = useState<User[]>([]);
+  const [groupChats, setGroupChats] = useState<GroupChat[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [pinnedConvoIds, setPinnedConvoIds] = useState<Set<string>>(new Set());
@@ -39,6 +42,7 @@ export function Sidebar({
   const [statusEmoji, setStatusEmoji] = useState(currentUser.statusEmoji ?? '');
   const [statusText, setStatusText] = useState(currentUser.statusText ?? '');
   const [showStatusEmojiPicker, setShowStatusEmojiPicker] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const saveStatus = async () => {
@@ -88,11 +92,29 @@ export function Sidebar({
     if (data) setPinnedConvoIds(new Set(data.map((r: any) => r.conversation_id)));
   };
 
+  const fetchGroupChats = async () => {
+    const { data } = await supabase.rpc('get_user_groups', { p_user_id: currentUser.id });
+    if (data) {
+      setGroupChats(data.map((g: any) => ({
+        id: g.id,
+        name: g.group_name ?? 'Unnamed Group',
+        avatarUrl: g.group_avatar_url ?? undefined,
+        participants: g.participants ?? [],
+        updatedAt: g.updated_at,
+        memberCount: g.member_count,
+      })));
+    }
+  };
+
   useEffect(() => {
     fetchRecentChats();
+    fetchGroupChats();
     loadPinnedConvos();
     const ch = supabase.channel('sidebar_convs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, fetchRecentChats)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+        fetchRecentChats();
+        fetchGroupChats();
+      })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [currentUser.id]);
@@ -159,6 +181,11 @@ export function Sidebar({
           <h1 className="text-xl font-bold tracking-tighter text-cyan-500">CHATice</h1>
         </div>
         <div className="flex items-center gap-1">
+          <button onClick={() => setShowCreateGroup(true)}
+            className="p-2 text-[var(--txt3)] hover:text-cyan-400 hover:bg-[var(--surface3)] transition-colors rounded-lg"
+            title="Create group chat">
+            <Users className="w-4 h-4" />
+          </button>
           <button onClick={toggleTheme}
             className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
             title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
@@ -195,8 +222,54 @@ export function Sidebar({
       {/* Chat list */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-2 space-y-0.5">
-          <h3 className="text-xs font-semibold text-[var(--txt3)] uppercase tracking-wider mb-2 px-2 mt-1">
-            {searchQuery.trim() ? 'Search Results' : 'Recent Chats'}
+          {/* Group Chats */}
+          {!searchQuery.trim() && groupChats.length > 0 && (
+            <>
+              <h3 className="text-xs font-semibold text-[var(--txt3)] uppercase tracking-wider mb-2 px-2 mt-1">
+                Groups
+              </h3>
+              {groupChats.map(group => {
+                const isActive = activeGroup?.id === group.id;
+                const unread = unreadCounts[group.id] ?? 0;
+                return (
+                  <button
+                    key={group.id}
+                    onClick={() => onSelectGroup(group)}
+                    onMouseEnter={() => setHoveredConvoId(group.id)}
+                    onMouseLeave={() => setHoveredConvoId(null)}
+                    className={cn(
+                      'w-full flex items-center gap-3 p-3 text-left rounded-lg transition-colors',
+                      isActive
+                        ? 'bg-[var(--surface4)] border-l-2 border-cyan-500'
+                        : 'hover:bg-[var(--surface3)] text-[var(--txt2)] hover:text-[var(--txt)]'
+                    )}
+                  >
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center text-white flex-shrink-0">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className={cn('text-sm font-semibold truncate', isActive ? 'text-[var(--txt)]' : '')}>
+                        {group.name}
+                      </h4>
+                      <div className="text-[10px] text-[var(--txt3)]">
+                        {group.memberCount ?? group.participants.length} members
+                      </div>
+                    </div>
+                    {unread > 0 && (
+                      <div className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center shadow-[0_0_8px_rgba(239,68,68,0.4)]">
+                        {unread > 99 ? '99+' : unread}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+              <div className="h-3" />
+            </>
+          )}
+
+          {/* Direct Messages */}
+          <h3 className="text-xs font-semibold text-[var(--txt3)] uppercase tracking-wider mb-2 px-2">
+            {searchQuery.trim() ? 'Search Results' : 'Chats'}
           </h3>
           {isSearching ? (
             <div className="flex justify-center p-4"><Loader2 className="w-5 h-5 text-[var(--txt3)] animate-spin" /></div>
@@ -405,5 +478,21 @@ export function Sidebar({
   }
 
   // Desktop: static sidebar
-  return sidebarContent;
+  return (
+    <>
+      {sidebarContent}
+      <AnimatePresence>
+        {showCreateGroup && (
+          <CreateGroupModal
+            currentUser={currentUser}
+            onClose={() => setShowCreateGroup(false)}
+            onGroupCreated={(groupId, groupName) => {
+              setShowCreateGroup(false);
+              fetchGroupChats();
+            }}
+          />
+        )}
+      </AnimatePresence>
+    </>
+  );
 }

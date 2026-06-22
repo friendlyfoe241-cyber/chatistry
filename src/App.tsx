@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, UserRow, UnreadCountRow } from './types';
+import { User, UserRow, UnreadCountRow, GroupChat } from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { LandingPage } from './components/LandingPage';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
+import { GroupChatArea } from './components/GroupChatArea';
 import { Notifications, NotificationItem } from './components/Notifications';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { supabase } from './supabase';
@@ -13,6 +14,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [activePartner, setActivePartner] = useState<User | null>(null);
+  const [activeGroup, setActiveGroup] = useState<GroupChat | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -22,9 +24,11 @@ export default function App() {
   const isMobile = useIsMobile();
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const activePartnerRef = useRef<User | null>(null);
+  const activeGroupRef = useRef<GroupChat | null>(null);
   const userCacheRef = useRef<Map<string, User>>(new Map());
 
   useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
+  useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
 
   // Keep currentUser.avatarUrl reliably in sync.
   // Retries with backoff to handle the window where the auth session
@@ -234,6 +238,7 @@ export default function App() {
 
   const handleSelectPartner = async (partner: User) => {
     setActivePartner(partner);
+    setActiveGroup(null);
     setUnreadCounts(prev => ({ ...prev, [partner.id]: 0 }));
     setNotifications(prev => prev.filter(n => n.sender.id !== partner.id));
     if (isMobile) setMobileSidebarOpen(false);
@@ -247,6 +252,20 @@ export default function App() {
     }
   };
 
+  const handleSelectGroup = async (group: GroupChat) => {
+    setActiveGroup(group);
+    setActivePartner(null);
+    setUnreadCounts(prev => ({ ...prev, [group.id]: 0 }));
+    if (isMobile) setMobileSidebarOpen(false);
+    if (user) {
+      const { error } = await supabase.from('conversation_reads').upsert(
+        { user_id: user.id, conversation_id: group.id, last_read_at: new Date().toISOString() },
+        { onConflict: 'user_id,conversation_id' }
+      );
+      if (error) console.warn('Failed to mark group as read:', error.message);
+    }
+  };
+
   const handleLogout = async () => {
     if (user) {
       const { error } = await supabase.from('users')
@@ -256,7 +275,7 @@ export default function App() {
     if (presenceChannelRef.current) await presenceChannelRef.current.untrack();
     const { error } = await supabase.auth.signOut();
     if (error) console.error('Sign out failed:', error.message);
-    setUser(null); setActivePartner(null); setUnreadCounts({});
+    setUser(null); setActivePartner(null); setActiveGroup(null); setUnreadCounts({});
   };
 
   const handleAvatarUpdate = (avatarUrl: string) =>
@@ -265,6 +284,7 @@ export default function App() {
   const handleBackToSidebar = () => {
     setMobileSidebarOpen(true);
     setActivePartner(null);
+    setActiveGroup(null);
   };
 
   if (loading) return (
@@ -289,7 +309,9 @@ export default function App() {
         <Sidebar
           currentUser={user}
           activePartner={activePartner}
+          activeGroup={activeGroup}
           onSelectPartner={handleSelectPartner}
+          onSelectGroup={handleSelectGroup}
           onLogout={handleLogout}
           onlineUserIds={onlineUserIds}
           onAvatarUpdate={handleAvatarUpdate}
@@ -298,14 +320,27 @@ export default function App() {
           mobileOpen={mobileSidebarOpen}
           onMobileClose={() => setMobileSidebarOpen(false)}
         />
-        {(!isMobile || !mobileSidebarOpen) && (
+        {(!isMobile || !mobileSidebarOpen) && activeGroup ? (
+          <GroupChatArea
+            currentUser={user}
+            group={activeGroup}
+            onBackToSidebar={isMobile ? handleBackToSidebar : undefined}
+          />
+        ) : (!isMobile || !mobileSidebarOpen) && activePartner ? (
           <ChatArea
             currentUser={user}
             partner={activePartner}
             onlineUserIds={onlineUserIds}
             onBackToSidebar={isMobile ? handleBackToSidebar : undefined}
           />
-        )}
+        ) : (!isMobile || !mobileSidebarOpen) ? (
+          <div className="flex-1 flex items-center justify-center bg-[var(--bg)]">
+            <div className="text-center text-[var(--txt3)]">
+              <div className="text-4xl mb-4">💬</div>
+              <p className="text-lg">Select a chat to start messaging</p>
+            </div>
+          </div>
+        ) : null}
         <Notifications
           items={notifications}
           onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}
