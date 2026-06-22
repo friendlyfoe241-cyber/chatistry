@@ -1,7 +1,25 @@
 -- ================================================================
--- MIGRATION: Group Chats
+-- MIGRATION: Group Chats (Complete & Clean)
 -- Run this in Supabase SQL Editor to add group chat functionality
 -- ================================================================
+
+-- 0. Clean up any previous failed attempts
+DROP POLICY IF EXISTS "Group members can view group membership" ON public.group_members;
+DROP POLICY IF EXISTS "Group members can join groups" ON public.group_members;
+DROP POLICY IF EXISTS "Admins can remove members" ON public.group_members;
+DROP POLICY IF EXISTS "Admins can update member roles" ON public.group_members;
+DROP TABLE IF EXISTS public.group_members CASCADE;
+
+DROP FUNCTION IF EXISTS public.create_group_conversation(text, uuid[]);
+DROP FUNCTION IF EXISTS public.add_group_member(text, uuid);
+DROP FUNCTION IF EXISTS public.remove_group_member(text, uuid);
+DROP FUNCTION IF EXISTS public.get_group_members(text);
+DROP FUNCTION IF EXISTS public.get_user_groups(uuid);
+
+DROP POLICY IF EXISTS "Users can view group chats they're members of" ON public.conversations;
+DROP POLICY IF EXISTS "Users can update group chats they belong to" ON public.conversations;
+DROP POLICY IF EXISTS "Users can update their conversations" ON public.conversations;
+DROP POLICY IF EXISTS "Users can view DM conversations" ON public.conversations;
 
 -- 1. Add group chat columns to conversations table
 ALTER TABLE public.conversations
@@ -11,7 +29,7 @@ ALTER TABLE public.conversations
   ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES public.users(id);
 
 -- 2. Create group_members table for tracking group membership
-CREATE TABLE IF NOT EXISTS public.group_members (
+CREATE TABLE public.group_members (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   conversation_id text NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
   user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -21,13 +39,13 @@ CREATE TABLE IF NOT EXISTS public.group_members (
 );
 
 -- Indexes for group_members
-CREATE INDEX IF NOT EXISTS idx_group_members_conv ON public.group_members (conversation_id);
-CREATE INDEX IF NOT EXISTS idx_group_members_user ON public.group_members (user_id);
+CREATE INDEX idx_group_members_conv ON public.group_members (conversation_id);
+CREATE INDEX idx_group_members_user ON public.group_members (user_id);
 
 -- 3. Enable RLS on group_members
 ALTER TABLE public.group_members ENABLE ROW LEVEL SECURITY;
 
--- RLS: group_members - use text casts for consistency
+-- RLS policies for group_members - using text casts for auth.uid() comparisons
 CREATE POLICY "Group members can view group membership" ON public.group_members
   FOR SELECT USING (
     auth.uid()::text = user_id::text OR
@@ -40,39 +58,23 @@ CREATE POLICY "Group members can view group membership" ON public.group_members
 
 CREATE POLICY "Group members can join groups" ON public.group_members
   FOR INSERT WITH CHECK (
-    auth.uid()::text = user_id::text AND
-    EXISTS (
-      SELECT 1 FROM public.conversations c
-      WHERE c.id = conversation_id AND c.is_group = true
-    )
+    auth.uid()::text = user_id::text
   );
 
-CREATE POLICY "Admins can remove members" ON public.group_members
+CREATE POLICY "Group members can remove themselves" ON public.group_members
   FOR DELETE USING (
-    auth.uid()::text = user_id::text OR
-    EXISTS (
-      SELECT 1 FROM public.group_members gm
-      WHERE gm.conversation_id = group_members.conversation_id
-      AND gm.user_id::text = auth.uid()::text
-      AND gm.role = 'admin'
-    )
+    auth.uid()::text = user_id::text
   );
 
-CREATE POLICY "Admins can update member roles" ON public.group_members
+CREATE POLICY "Group members can update themselves" ON public.group_members
   FOR UPDATE USING (
-    EXISTS (
-      SELECT 1 FROM public.group_members gm
-      WHERE gm.conversation_id = group_members.conversation_id
-      AND gm.user_id::text = auth.uid()::text
-      AND gm.role = 'admin'
-    )
+    auth.uid()::text = user_id::text
   );
 
 -- 4. Update conversation RLS policies for group chats
-DROP POLICY IF EXISTS "Users can update their conversations" ON public.conversations;
 CREATE POLICY "Users can view DM conversations" ON public.conversations
   FOR SELECT USING (
-    NOT is_group AND auth.uid()::text = ANY(participants)
+    (is_group IS NULL OR is_group = false) AND auth.uid()::text = ANY(participants)
   );
 
 CREATE POLICY "Users can view group chats they're members of" ON public.conversations
@@ -80,7 +82,7 @@ CREATE POLICY "Users can view group chats they're members of" ON public.conversa
     is_group = true AND
     EXISTS (
       SELECT 1 FROM public.group_members gm
-      WHERE gm.conversation_id = id
+      WHERE gm.conversation_id = public.conversations.id
       AND gm.user_id::text = auth.uid()::text
     )
   );
@@ -90,7 +92,7 @@ CREATE POLICY "Users can update group chats they belong to" ON public.conversati
     is_group = true AND
     EXISTS (
       SELECT 1 FROM public.group_members gm
-      WHERE gm.conversation_id = id
+      WHERE gm.conversation_id = public.conversations.id
       AND gm.user_id::text = auth.uid()::text
       AND gm.role = 'admin'
     )
@@ -98,15 +100,8 @@ CREATE POLICY "Users can update group chats they belong to" ON public.conversati
 
 -- 5. RPC Functions
 
--- Drop existing functions if they exist
-DROP FUNCTION IF EXISTS public.create_group_conversation(text, uuid[]);
-DROP FUNCTION IF EXISTS public.add_group_member(text, uuid);
-DROP FUNCTION IF EXISTS public.remove_group_member(text, uuid);
-DROP FUNCTION IF EXISTS public.get_group_members(text);
-DROP FUNCTION IF EXISTS public.get_user_groups(uuid);
-
 -- Create a group conversation
-CREATE OR REPLACE FUNCTION public.create_group_conversation(
+CREATE FUNCTION public.create_group_conversation(
   p_group_name text,
   p_participant_ids uuid[]
 )
@@ -119,7 +114,6 @@ DECLARE
   v_sorted_ids text[];
   v_admin_id uuid;
 BEGIN
-  -- Sort and convert to text array for consistent ID generation
   SELECT array_agg(id::text ORDER BY id) INTO v_sorted_ids FROM unnest(p_participant_ids) AS id;
   v_conv_id := 'group_' || array_to_string(v_sorted_ids, '_');
   v_admin_id := auth.uid();
@@ -132,15 +126,15 @@ BEGIN
   VALUES (v_conv_id, true, p_group_name, p_participant_ids, v_admin_id, timezone('utc', now()), timezone('utc', now()));
   
   INSERT INTO public.group_members (conversation_id, user_id, role)
-  SELECT v_conv_id, unnest_id, CASE WHEN unnest_id = v_admin_id THEN 'admin' ELSE 'member' END
-  FROM unnest(p_participant_ids) AS unnest_id;
+  SELECT v_conv_id, unnest_id::uuid, CASE WHEN unnest_id::uuid = v_admin_id THEN 'admin' ELSE 'member' END
+  FROM unnest(v_sorted_ids) AS unnest_id;
   
   RETURN v_conv_id;
 END;
 $$;
 
 -- Add member to group
-CREATE OR REPLACE FUNCTION public.add_group_member(
+CREATE FUNCTION public.add_group_member(
   p_conversation_id text,
   p_user_id uuid
 )
@@ -161,14 +155,14 @@ BEGIN
   VALUES (p_conversation_id, p_user_id, 'member');
   
   UPDATE public.conversations
-  SET participants = array_append(participants, p_user_id),
+  SET participants = participants || p_user_id,
       updated_at = timezone('utc', now())
   WHERE id = p_conversation_id;
 END;
 $$;
 
 -- Remove member from group
-CREATE OR REPLACE FUNCTION public.remove_group_member(
+CREATE FUNCTION public.remove_group_member(
   p_conversation_id text,
   p_user_id uuid
 )
@@ -188,7 +182,7 @@ END;
 $$;
 
 -- Get group members
-CREATE OR REPLACE FUNCTION public.get_group_members(p_conversation_id text)
+CREATE FUNCTION public.get_group_members(p_conversation_id text)
 RETURNS TABLE(user_id uuid, username text, display_name text, avatar_url text, role text, joined_at timestamptz)
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -204,7 +198,7 @@ END;
 $$;
 
 -- Get user's group conversations
-CREATE OR REPLACE FUNCTION public.get_user_groups(p_user_id uuid)
+CREATE FUNCTION public.get_user_groups(p_user_id uuid)
 RETURNS TABLE(id text, group_name text, group_avatar_url text, participants uuid[], updated_at timestamptz, member_count bigint)
 LANGUAGE plpgsql
 SECURITY DEFINER
