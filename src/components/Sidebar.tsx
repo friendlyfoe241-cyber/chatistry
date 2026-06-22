@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User } from '../types';
-import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X, Smile } from 'lucide-react';
+import { User, ConversationSummary, UserRow, ConversationRow } from '../types';
+import { Search, LogOut, Loader2, Camera, Sun, Moon, Star, X, Smile, Users, UserPlus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
 import { supabase } from '../supabase';
 import { Avatar } from './Avatar';
 import { useTheme } from '../context/ThemeContext';
 import { EmojiPicker } from './EmojiPicker';
-import { motion, AnimatePresence } from 'motion/react';
+import { NewGroupModal } from './NewGroupModal';
 
 interface SidebarProps {
   currentUser: User;
-  activePartner: User | null;
-  onSelectPartner: (user: User) => void;
+  activeConversation: ConversationSummary | null;
+  onSelectConversation: (conv: ConversationSummary) => void;
   onLogout: () => void;
   onlineUserIds: string[];
   onAvatarUpdate: (url: string) => void;
@@ -23,14 +23,14 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  currentUser, activePartner, onSelectPartner, onLogout,
+  currentUser, activeConversation, onSelectConversation, onLogout,
   onlineUserIds, onAvatarUpdate, unreadCounts,
   isMobile, mobileOpen, onMobileClose,
 }: SidebarProps) {
   const { theme, toggleTheme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
-  const [recentChats, setRecentChats] = useState<User[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [pinnedConvoIds, setPinnedConvoIds] = useState<Set<string>>(new Set());
@@ -39,6 +39,7 @@ export function Sidebar({
   const [statusEmoji, setStatusEmoji] = useState(currentUser.statusEmoji ?? '');
   const [statusText, setStatusText] = useState(currentUser.statusText ?? '');
   const [showStatusEmojiPicker, setShowStatusEmojiPicker] = useState(false);
+  const [showNewGroup, setShowNewGroup] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const saveStatus = async () => {
@@ -46,40 +47,61 @@ export function Sidebar({
     await supabase.from('users').update({ status_emoji: statusEmoji.trim(), status_text: statusText.trim() }).eq('id', currentUser.id);
   };
 
-  const fetchRecentChats = async () => {
+  const fetchConversations = async () => {
     const { data: convs } = await supabase
-      .from('conversations').select('id, participants, updated_at')
+      .from('conversations').select('id, participants, updated_at, is_group, name, avatar_url, created_by')
       .contains('participants', [currentUser.id])
       .order('updated_at', { ascending: false });
-    if (!convs?.length) return;
+    if (!convs?.length) { setConversations([]); return; }
 
-    // Preserve the conversation order (most recent first) while deduplicating
-    const orderedPartnerIds: string[] = [];
-    const seen = new Set<string>();
-    for (const c of convs as { id: string; participants: string[]; updated_at: string }[]) {
-      const pid = c.participants.find(id => id !== currentUser.id);
-      if (pid && !seen.has(pid)) { orderedPartnerIds.push(pid); seen.add(pid); }
+    const rows = convs as ConversationRow[];
+    const dmPartnerIds = Array.from(new Set(
+      rows.filter(c => !c.is_group)
+        .map(c => c.participants.find(id => id !== currentUser.id))
+        .filter((id): id is string => !!id)
+    ));
+
+    const partnerMap = new Map<string, UserRow>();
+    if (dmPartnerIds.length) {
+      const { data: users } = await supabase
+        .from('users').select('id, username, display_name, avatar_url, status_emoji, status_text')
+        .in('id', dmPartnerIds);
+      (users as UserRow[] ?? []).forEach(u => partnerMap.set(u.id, u));
     }
-    if (!orderedPartnerIds.length) return;
 
-    const { data: users } = await supabase
-      .from('users').select('id, username, display_name, avatar_url, status_emoji, status_text')
-      .in('id', orderedPartnerIds.slice(0, 20));
-    if (!users) return;
-
-    // Re-sort fetched users back into conversation order (IN query doesn't preserve order)
-    const userMap = new Map(users.map((u: any) => [u.id, u]));
-    const sorted = orderedPartnerIds
-      .filter(id => userMap.has(id))
-      .map(id => {
-        const u = userMap.get(id)!;
-        return {
-          id: u.id, username: u.username, displayName: u.display_name ?? undefined,
-          avatarUrl: u.avatar_url ?? undefined, statusEmoji: u.status_emoji ?? undefined,
+    const summaries: ConversationSummary[] = [];
+    for (const c of rows) {
+      if (c.is_group) {
+        summaries.push({
+          id: c.id, isGroup: true,
+          name: c.name || 'Group chat',
+          avatarUrl: c.avatar_url ?? undefined,
+          subtitle: `${c.participants.length} member${c.participants.length !== 1 ? 's' : ''}`,
+          participantIds: c.participants,
+          updatedAt: c.updated_at,
+          createdBy: c.created_by ?? undefined,
+        });
+      } else {
+        const pid = c.participants.find(id => id !== currentUser.id);
+        const u = pid ? partnerMap.get(pid) : undefined;
+        if (!u) continue; // partner profile missing — skip defensively
+        summaries.push({
+          id: c.id, isGroup: false,
+          name: u.display_name || `@${u.username}`,
+          avatarUrl: u.avatar_url ?? undefined,
+          subtitle: u.display_name ? `@${u.username}` : undefined,
+          participantIds: c.participants,
+          updatedAt: c.updated_at,
+          partner: {
+            id: u.id, username: u.username, displayName: u.display_name ?? undefined,
+            avatarUrl: u.avatar_url ?? undefined, statusEmoji: u.status_emoji ?? undefined, statusText: u.status_text ?? undefined,
+          },
+          statusEmoji: u.status_emoji ?? undefined,
           statusText: u.status_text ?? undefined,
-        };
-      });
-    setRecentChats(sorted);
+        });
+      }
+    }
+    setConversations(summaries);
   };
 
   const loadPinnedConvos = async () => {
@@ -89,10 +111,10 @@ export function Sidebar({
   };
 
   useEffect(() => {
-    fetchRecentChats();
+    fetchConversations();
     loadPinnedConvos();
     const ch = supabase.channel('sidebar_convs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, fetchRecentChats)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, fetchConversations)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [currentUser.id]);
@@ -130,22 +152,41 @@ export function Sidebar({
     finally { setUploadingAvatar(false); if (avatarInputRef.current) avatarInputRef.current.value = ''; }
   };
 
-  const togglePinConvo = async (e: React.MouseEvent, u: User) => {
+  const togglePinConvo = async (e: React.MouseEvent, convId: string) => {
     e.stopPropagation();
-    const chatId = [currentUser.id, u.id].sort().join('_');
-    if (pinnedConvoIds.has(chatId)) {
-      await supabase.from('user_pinned_conversations').delete().eq('user_id', currentUser.id).eq('conversation_id', chatId);
-      setPinnedConvoIds(prev => { const s = new Set(prev); s.delete(chatId); return s; });
+    if (pinnedConvoIds.has(convId)) {
+      await supabase.from('user_pinned_conversations').delete().eq('user_id', currentUser.id).eq('conversation_id', convId);
+      setPinnedConvoIds(prev => { const s = new Set(prev); s.delete(convId); return s; });
     } else {
-      await supabase.from('user_pinned_conversations').insert({ user_id: currentUser.id, conversation_id: chatId });
-      setPinnedConvoIds(prev => new Set([...prev, chatId]));
+      await supabase.from('user_pinned_conversations').insert({ user_id: currentUser.id, conversation_id: convId });
+      setPinnedConvoIds(prev => new Set([...prev, convId]));
     }
   };
 
-  const baseList = searchQuery.trim() ? searchResults : recentChats;
-  const pinnedList = baseList.filter(u => pinnedConvoIds.has([currentUser.id, u.id].sort().join('_')));
-  const unpinnedList = baseList.filter(u => !pinnedConvoIds.has([currentUser.id, u.id].sort().join('_')));
+  const handleSelectSearchUser = (u: User) => {
+    const chatId = [currentUser.id, u.id].sort().join('_');
+    const existing = conversations.find(c => c.id === chatId);
+    if (existing) { onSelectConversation(existing); return; }
+    onSelectConversation({
+      id: chatId, isGroup: false,
+      name: u.displayName || `@${u.username}`,
+      avatarUrl: u.avatarUrl, subtitle: u.displayName ? `@${u.username}` : undefined,
+      partner: u, participantIds: [currentUser.id, u.id],
+      statusEmoji: u.statusEmoji, statusText: u.statusText,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const query = searchQuery.trim().toLowerCase();
+  const filteredConversations = query
+    ? conversations.filter(c => c.name.toLowerCase().includes(query) || (c.subtitle ?? '').toLowerCase().includes(query))
+    : conversations;
+  const pinnedList = filteredConversations.filter(c => pinnedConvoIds.has(c.id));
+  const unpinnedList = filteredConversations.filter(c => !pinnedConvoIds.has(c.id));
   const displayList = [...pinnedList, ...unpinnedList];
+  // Don't suggest people you're already chatting with as "new" search results
+  const knownPartnerIds = new Set(conversations.filter(c => !c.isGroup).map(c => c.partner!.id));
+  const newPeopleResults = searchResults.filter(u => !knownPartnerIds.has(u.id));
 
   const sidebarContent = (
     <div className={cn(
@@ -159,6 +200,11 @@ export function Sidebar({
           <h1 className="text-xl font-bold tracking-tighter text-cyan-500">CHATice</h1>
         </div>
         <div className="flex items-center gap-1">
+          <button onClick={() => setShowNewGroup(true)}
+            className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
+            title="New group">
+            <Users className="w-4 h-4" />
+          </button>
           <button onClick={toggleTheme}
             className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
             title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
@@ -185,7 +231,7 @@ export function Sidebar({
         <div className="relative group">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--txt3)] group-focus-within:text-cyan-600 transition-colors" />
           <input
-            type="text" placeholder="Search users..." value={searchQuery}
+            type="text" placeholder="Search chats or people..." value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full bg-[var(--surface4)] border border-[var(--border3)] rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:border-cyan-600 transition-colors placeholder-[var(--txt3)] text-[var(--txt)]"
           />
@@ -196,28 +242,29 @@ export function Sidebar({
       <div className="flex-1 overflow-y-auto">
         <div className="px-2 space-y-0.5">
           <h3 className="text-xs font-semibold text-[var(--txt3)] uppercase tracking-wider mb-2 px-2 mt-1">
-            {searchQuery.trim() ? 'Search Results' : 'Recent Chats'}
+            {searchQuery.trim() ? 'Your Chats' : 'Recent Chats'}
           </h3>
-          {isSearching ? (
-            <div className="flex justify-center p-4"><Loader2 className="w-5 h-5 text-[var(--txt3)] animate-spin" /></div>
-          ) : displayList.length === 0 ? (
+          {displayList.length === 0 ? (
             <div className="p-4 text-center text-[var(--txt3)] text-sm">
-              {searchQuery.trim() ? 'No users found' : 'No chats yet'}
+              {searchQuery.trim() ? 'No matching chats' : 'No chats yet'}
             </div>
           ) : (
-            displayList.map(u => {
-              const chatId = [currentUser.id, u.id].sort().join('_');
-              const isActive = activePartner?.id === u.id;
-              const isOnline = onlineUserIds.includes(u.id);
-              const unread = unreadCounts[u.id] ?? 0;
-              const isPinned = pinnedConvoIds.has(chatId);
-              const isHov = hoveredConvoId === u.id;
+            displayList.map(c => {
+              const isActive = activeConversation?.id === c.id;
+              const isOnline = !c.isGroup && c.partner ? onlineUserIds.includes(c.partner.id) : false;
+              const onlineMemberCount = c.isGroup
+                ? c.participantIds.filter(id => id !== currentUser.id && onlineUserIds.includes(id)).length
+                : 0;
+              const unread = unreadCounts[c.id] ?? 0;
+              const isPinned = pinnedConvoIds.has(c.id);
+              const isHov = hoveredConvoId === c.id;
+              const avatarUser = { id: c.id, username: c.name, avatarUrl: c.avatarUrl } as User;
 
               return (
                 <button
-                  key={u.id}
-                  onClick={() => onSelectPartner(u)}
-                  onMouseEnter={() => setHoveredConvoId(u.id)}
+                  key={c.id}
+                  onClick={() => onSelectConversation(c)}
+                  onMouseEnter={() => setHoveredConvoId(c.id)}
                   onMouseLeave={() => setHoveredConvoId(null)}
                   className={cn(
                     'w-full flex items-center gap-3 p-3 text-left rounded-lg transition-colors',
@@ -227,7 +274,7 @@ export function Sidebar({
                   )}
                 >
                   <div className="relative flex-shrink-0">
-                    <Avatar user={u} size="md" />
+                    <Avatar user={avatarUser} size="md" />
                     {isOnline && (
                       <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-[var(--surface2)] rounded-full shadow-[0_0_4px_rgba(34,197,94,0.6)]" />
                     )}
@@ -235,24 +282,33 @@ export function Sidebar({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <h4 className={cn('text-sm font-semibold truncate', isActive ? 'text-[var(--txt)]' : '')}>
-                        {u.displayName || `@${u.username}`}
+                        {c.name}
                       </h4>
                       {isPinned && <Star className="w-3 h-3 text-yellow-400 fill-yellow-400 flex-shrink-0" />}
                     </div>
                     <div className="text-[10px] text-[var(--txt3)]">
-                      {u.displayName && <span className="text-[var(--txt3)]">@{u.username} · </span>}
-                      {isOnline ? <span className="text-green-400">Online</span> : 'Offline'}
+                      {c.isGroup ? (
+                        <>
+                          {c.subtitle}
+                          {onlineMemberCount > 0 && <span className="text-green-400"> · {onlineMemberCount} online</span>}
+                        </>
+                      ) : (
+                        <>
+                          {c.subtitle && <span className="text-[var(--txt3)]">{c.subtitle} · </span>}
+                          {isOnline ? <span className="text-green-400">Online</span> : 'Offline'}
+                        </>
+                      )}
                     </div>
-                    {(u.statusEmoji || u.statusText) && (
+                    {!c.isGroup && (c.statusEmoji || c.statusText) && (
                       <div className="text-[10px] text-[var(--txt3)] truncate mt-0.5">
-                        {u.statusEmoji} {u.statusText}
+                        {c.statusEmoji} {c.statusText}
                       </div>
                     )}
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {(isHov || isPinned) && unread === 0 && (
                       <button
-                        onClick={e => togglePinConvo(e, u)}
+                        onClick={e => togglePinConvo(e, c.id)}
                         className={cn('w-6 h-6 rounded flex items-center justify-center transition-colors',
                           isPinned ? 'text-yellow-400 hover:text-yellow-300' : 'text-[var(--txt3)] hover:text-yellow-400'
                         )}
@@ -270,6 +326,34 @@ export function Sidebar({
                 </button>
               );
             })
+          )}
+
+          {/* New people (search only) */}
+          {searchQuery.trim() && (
+            <>
+              <h3 className="text-xs font-semibold text-[var(--txt3)] uppercase tracking-wider mb-2 px-2 mt-5 flex items-center gap-1.5">
+                <UserPlus className="w-3 h-3" /> Start New Chat
+              </h3>
+              {isSearching ? (
+                <div className="flex justify-center p-4"><Loader2 className="w-5 h-5 text-[var(--txt3)] animate-spin" /></div>
+              ) : newPeopleResults.length === 0 ? (
+                <div className="p-4 text-center text-[var(--txt3)] text-sm">No users found</div>
+              ) : (
+                newPeopleResults.map(u => (
+                  <button key={u.id} onClick={() => handleSelectSearchUser(u)}
+                    className="w-full flex items-center gap-3 p-3 text-left rounded-lg transition-colors hover:bg-[var(--surface3)] text-[var(--txt2)] hover:text-[var(--txt)]">
+                    <Avatar user={u} size="md" />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-sm font-semibold truncate">{u.displayName || `@${u.username}`}</h4>
+                      <div className="text-[10px] text-[var(--txt3)]">
+                        {u.displayName && <span>@{u.username} · </span>}
+                        {onlineUserIds.includes(u.id) ? <span className="text-green-400">Online</span> : 'Offline'}
+                      </div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </>
           )}
         </div>
       </div>
@@ -371,39 +455,47 @@ export function Sidebar({
     </div>
   );
 
-  // Mobile: full-screen slide-in drawer with backdrop
-  if (isMobile) {
-    return (
+  return (
+    <>
+      {isMobile ? (
+        <AnimatePresence>
+          {mobileOpen && (
+            <>
+              {/* Backdrop */}
+              <motion.div
+                key="backdrop"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+                onClick={onMobileClose}
+              />
+              {/* Drawer */}
+              <motion.div
+                key="drawer"
+                initial={{ x: '-100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '-100%' }}
+                transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+                className="fixed top-0 left-0 bottom-0 z-50 w-[85vw] max-w-sm shadow-2xl"
+              >
+                {sidebarContent}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+      ) : sidebarContent}
+
       <AnimatePresence>
-        {mobileOpen && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              key="backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-              onClick={onMobileClose}
-            />
-            {/* Drawer */}
-            <motion.div
-              key="drawer"
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              className="fixed top-0 left-0 bottom-0 z-50 w-[85vw] max-w-sm shadow-2xl"
-            >
-              {sidebarContent}
-            </motion.div>
-          </>
+        {showNewGroup && (
+          <NewGroupModal
+            currentUser={currentUser}
+            onClose={() => setShowNewGroup(false)}
+            onCreated={conv => { onSelectConversation(conv); fetchConversations(); }}
+          />
         )}
       </AnimatePresence>
-    );
-  }
-
-  // Desktop: static sidebar
-  return sidebarContent;
+    </>
+  );
 }
