@@ -27,20 +27,20 @@ CREATE INDEX IF NOT EXISTS idx_group_members_user ON public.group_members (user_
 -- 3. Enable RLS on group_members
 ALTER TABLE public.group_members ENABLE ROW LEVEL SECURITY;
 
--- RLS: group_members - members can view their groups, admins can manage
+-- RLS: group_members - use text casts for consistency
 CREATE POLICY "Group members can view group membership" ON public.group_members
   FOR SELECT USING (
-    auth.uid() = user_id OR
+    auth.uid()::text = user_id::text OR
     EXISTS (
       SELECT 1 FROM public.group_members gm2
       WHERE gm2.conversation_id = group_members.conversation_id
-      AND gm2.user_id = auth.uid()
+      AND gm2.user_id::text = auth.uid()::text
     )
   );
 
 CREATE POLICY "Group members can join groups" ON public.group_members
   FOR INSERT WITH CHECK (
-    auth.uid() = user_id AND
+    auth.uid()::text = user_id::text AND
     EXISTS (
       SELECT 1 FROM public.conversations c
       WHERE c.id = conversation_id AND c.is_group = true
@@ -49,11 +49,11 @@ CREATE POLICY "Group members can join groups" ON public.group_members
 
 CREATE POLICY "Admins can remove members" ON public.group_members
   FOR DELETE USING (
-    auth.uid() = user_id OR
+    auth.uid()::text = user_id::text OR
     EXISTS (
       SELECT 1 FROM public.group_members gm
       WHERE gm.conversation_id = group_members.conversation_id
-      AND gm.user_id = auth.uid()
+      AND gm.user_id::text = auth.uid()::text
       AND gm.role = 'admin'
     )
   );
@@ -63,7 +63,7 @@ CREATE POLICY "Admins can update member roles" ON public.group_members
     EXISTS (
       SELECT 1 FROM public.group_members gm
       WHERE gm.conversation_id = group_members.conversation_id
-      AND gm.user_id = auth.uid()
+      AND gm.user_id::text = auth.uid()::text
       AND gm.role = 'admin'
     )
   );
@@ -72,7 +72,7 @@ CREATE POLICY "Admins can update member roles" ON public.group_members
 DROP POLICY IF EXISTS "Users can update their conversations" ON public.conversations;
 CREATE POLICY "Users can view DM conversations" ON public.conversations
   FOR SELECT USING (
-    NOT is_group AND auth.uid() = ANY(participants)
+    NOT is_group AND auth.uid()::text = ANY(participants)
   );
 
 CREATE POLICY "Users can view group chats they're members of" ON public.conversations
@@ -80,7 +80,8 @@ CREATE POLICY "Users can view group chats they're members of" ON public.conversa
     is_group = true AND
     EXISTS (
       SELECT 1 FROM public.group_members gm
-      WHERE gm.conversation_id = id AND gm.user_id = auth.uid()
+      WHERE gm.conversation_id = id
+      AND gm.user_id::text = auth.uid()::text
     )
   );
 
@@ -89,11 +90,20 @@ CREATE POLICY "Users can update group chats they belong to" ON public.conversati
     is_group = true AND
     EXISTS (
       SELECT 1 FROM public.group_members gm
-      WHERE gm.conversation_id = id AND gm.user_id = auth.uid() AND gm.role = 'admin'
+      WHERE gm.conversation_id = id
+      AND gm.user_id::text = auth.uid()::text
+      AND gm.role = 'admin'
     )
   );
 
 -- 5. RPC Functions
+
+-- Drop existing functions if they exist
+DROP FUNCTION IF EXISTS public.create_group_conversation(text, uuid[]);
+DROP FUNCTION IF EXISTS public.add_group_member(text, uuid);
+DROP FUNCTION IF EXISTS public.remove_group_member(text, uuid);
+DROP FUNCTION IF EXISTS public.get_group_members(text);
+DROP FUNCTION IF EXISTS public.get_user_groups(uuid);
 
 -- Create a group conversation
 CREATE OR REPLACE FUNCTION public.create_group_conversation(
@@ -106,10 +116,11 @@ SECURITY DEFINER
 AS $$
 DECLARE
   v_conv_id text;
-  v_sorted_ids uuid[];
+  v_sorted_ids text[];
   v_admin_id uuid;
 BEGIN
-  SELECT array_agg(id ORDER BY id) INTO v_sorted_ids FROM unnest(p_participant_ids) AS id;
+  -- Sort and convert to text array for consistent ID generation
+  SELECT array_agg(id::text ORDER BY id) INTO v_sorted_ids FROM unnest(p_participant_ids) AS id;
   v_conv_id := 'group_' || array_to_string(v_sorted_ids, '_');
   v_admin_id := auth.uid();
   
@@ -118,11 +129,11 @@ BEGIN
   END IF;
   
   INSERT INTO public.conversations (id, is_group, group_name, participants, created_by, created_at, updated_at)
-  VALUES (v_conv_id, true, p_group_name, v_sorted_ids, v_admin_id, timezone('utc', now()), timezone('utc', now()));
+  VALUES (v_conv_id, true, p_group_name, p_participant_ids, v_admin_id, timezone('utc', now()), timezone('utc', now()));
   
   INSERT INTO public.group_members (conversation_id, user_id, role)
-  SELECT v_conv_id, user_id, CASE WHEN user_id = v_admin_id THEN 'admin' ELSE 'member' END
-  FROM unnest(p_participant_ids) AS user_id;
+  SELECT v_conv_id, unnest_id, CASE WHEN unnest_id = v_admin_id THEN 'admin' ELSE 'member' END
+  FROM unnest(p_participant_ids) AS unnest_id;
   
   RETURN v_conv_id;
 END;
@@ -138,7 +149,11 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM public.group_members WHERE conversation_id = p_conversation_id AND user_id = p_user_id) THEN
+  IF EXISTS (
+    SELECT 1 FROM public.group_members 
+    WHERE conversation_id = p_conversation_id 
+    AND user_id = p_user_id
+  ) THEN
     RETURN;
   END IF;
   
@@ -191,10 +206,12 @@ $$;
 -- Get user's group conversations
 CREATE OR REPLACE FUNCTION public.get_user_groups(p_user_id uuid)
 RETURNS TABLE(id text, group_name text, group_avatar_url text, participants uuid[], updated_at timestamptz, member_count bigint)
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 STABLE
 AS $$
+BEGIN
+  RETURN QUERY
   SELECT
     c.id,
     c.group_name,
@@ -207,6 +224,7 @@ AS $$
   WHERE c.is_group = true AND gm.user_id = p_user_id
   GROUP BY c.id, c.group_name, c.group_avatar_url, c.participants, c.updated_at
   ORDER BY c.updated_at DESC;
+END;
 $$;
 
 -- 6. Grant execute permissions
