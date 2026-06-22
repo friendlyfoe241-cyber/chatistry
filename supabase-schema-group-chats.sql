@@ -3,23 +3,33 @@
 -- Run this in Supabase SQL Editor to add group chat functionality
 -- ================================================================
 
--- 0. Clean up any previous failed attempts
-DROP POLICY IF EXISTS "Group members can view group membership" ON public.group_members;
-DROP POLICY IF EXISTS "Group members can join groups" ON public.group_members;
-DROP POLICY IF EXISTS "Admins can remove members" ON public.group_members;
-DROP POLICY IF EXISTS "Admins can update member roles" ON public.group_members;
-DROP TABLE IF EXISTS public.group_members CASCADE;
+-- 0. Clean up any previous failed attempts (use DO block to handle if they don't exist)
+DO $$ BEGIN
+  DROP POLICY IF EXISTS "Group members can view group membership" ON public.group_members;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
-DROP FUNCTION IF EXISTS public.create_group_conversation(text, uuid[]);
-DROP FUNCTION IF EXISTS public.add_group_member(text, uuid);
-DROP FUNCTION IF EXISTS public.remove_group_member(text, uuid);
-DROP FUNCTION IF EXISTS public.get_group_members(text);
-DROP FUNCTION IF EXISTS public.get_user_groups(uuid);
+DO $$ BEGIN
+  DROP TABLE IF EXISTS public.group_members CASCADE;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
-DROP POLICY IF EXISTS "Users can view group chats they're members of" ON public.conversations;
-DROP POLICY IF EXISTS "Users can update group chats they belong to" ON public.conversations;
-DROP POLICY IF EXISTS "Users can update their conversations" ON public.conversations;
-DROP POLICY IF EXISTS "Users can view DM conversations" ON public.conversations;
+DO $$ BEGIN
+  DROP FUNCTION IF EXISTS public.create_group_conversation(text, uuid[]);
+  DROP FUNCTION IF EXISTS public.add_group_member(text, uuid);
+  DROP FUNCTION IF EXISTS public.remove_group_member(text, uuid);
+  DROP FUNCTION IF EXISTS public.get_group_members(text);
+  DROP FUNCTION IF EXISTS public.get_user_groups(uuid);
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  DROP POLICY IF EXISTS "Users can view group chats they're members of" ON public.conversations;
+  DROP POLICY IF EXISTS "Users can update group chats they belong to" ON public.conversations;
+  DROP POLICY IF EXISTS "Users can update their conversations" ON public.conversations;
+  DROP POLICY IF EXISTS "Users can view DM conversations" ON public.conversations;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
 -- 1. Add group chat columns to conversations table
 ALTER TABLE public.conversations
