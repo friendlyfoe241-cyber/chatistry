@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, UserRow, UnreadCountRow } from './types';
+import { User, UserRow, UnreadCountRow, ConversationSummary } from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { LandingPage } from './components/LandingPage';
 import { Sidebar } from './components/Sidebar';
@@ -9,10 +9,18 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { supabase } from './supabase';
 import { useIsMobile } from './hooks/useIsMobile';
 
+interface ConvMeta {
+  isGroup: boolean;
+  name: string | null;
+  avatarUrl: string | null;
+  participantIds: string[];
+  createdBy: string | null;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activePartner, setActivePartner] = useState<User | null>(null);
+  const [activeConversation, setActiveConversation] = useState<ConversationSummary | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -21,10 +29,11 @@ export default function App() {
 
   const isMobile = useIsMobile();
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const activePartnerRef = useRef<User | null>(null);
+  const activeConversationRef = useRef<ConversationSummary | null>(null);
   const userCacheRef = useRef<Map<string, User>>(new Map());
+  const convCacheRef = useRef<Map<string, ConvMeta>>(new Map());
 
-  useEffect(() => { activePartnerRef.current = activePartner; }, [activePartner]);
+  useEffect(() => { activeConversationRef.current = activeConversation; }, [activeConversation]);
 
   // Keep currentUser.avatarUrl reliably in sync.
   // Retries with backoff to handle the window where the auth session
@@ -84,6 +93,7 @@ export default function App() {
   };
 
   // Single RPC call instead of N+1 queries per conversation.
+  // Keyed by conversation_id so it works uniformly for DMs and group chats.
   // Falls back to the old loop-based approach if the RPC isn't deployed yet.
   const loadUnreadCounts = async (userId: string) => {
     const { data, error } = await supabase.rpc('get_unread_counts', { p_user_id: userId });
@@ -91,7 +101,7 @@ export default function App() {
     if (!error && data) {
       const counts: Record<string, number> = {};
       (data as UnreadCountRow[]).forEach(row => {
-        if (row.partner_id) counts[row.partner_id] = Number(row.unread_count);
+        if (row.conversation_id) counts[row.conversation_id] = Number(row.unread_count);
       });
       setUnreadCounts(counts);
       return;
@@ -117,15 +127,13 @@ export default function App() {
 
     const counts: Record<string, number> = {};
     await Promise.all(
-      (convs as { id: string; participants: string[] }[]).map(async conv => {
-        const partnerId = conv.participants.find(id => id !== userId);
-        if (!partnerId) return;
-        const lastRead = readMap[conv.id] ?? '1970-01-01T00:00:00Z';
+      convIds.map(async convId => {
+        const lastRead = readMap[convId] ?? '1970-01-01T00:00:00Z';
         const { count, error: cErr } = await supabase.from('messages')
           .select('id', { count: 'exact', head: true })
-          .eq('conversation_id', conv.id).neq('sender_id', userId).gt('created_at', lastRead);
+          .eq('conversation_id', convId).neq('sender_id', userId).gt('created_at', lastRead);
         if (cErr) { console.warn('Failed to count messages:', cErr.message); return; }
-        if (count && count > 0) counts[partnerId] = count;
+        if (count && count > 0) counts[convId] = count;
       })
     );
     setUnreadCounts(counts);
@@ -184,19 +192,38 @@ export default function App() {
     return () => { supabase.removeChannel(channel); presenceChannelRef.current = null; };
   }, [user]);
 
+  // Resolve (and cache) the conversation this message belongs to, so notifications
+  // can show the right title/avatar for both 1:1 DMs and group chats.
+  const getConvMeta = async (conversationId: string): Promise<ConvMeta | null> => {
+    const cached = convCacheRef.current.get(conversationId);
+    if (cached) return cached;
+    const { data, error } = await supabase
+      .from('conversations').select('is_group, name, avatar_url, participants, created_by')
+      .eq('id', conversationId).single();
+    if (error || !data) { console.warn('Failed to fetch conversation meta:', error?.message); return null; }
+    const meta: ConvMeta = {
+      isGroup: data.is_group, name: data.name, avatarUrl: data.avatar_url,
+      participantIds: data.participants, createdBy: data.created_by,
+    };
+    convCacheRef.current.set(conversationId, meta);
+    return meta;
+  };
+
   useEffect(() => {
     if (!user) return;
     const channel = supabase.channel('app-notifications')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async ({ new: msg }) => {
         if (msg.sender_id === user.id) return;
-        const activeId = activePartnerRef.current?.id;
-        const activeChatId = activeId ? [user.id, activeId].sort().join('_') : null;
-        if (msg.conversation_id === activeChatId) return;
+        const convId = msg.conversation_id as string;
+        if (convId === activeConversationRef.current?.id) return;
+
+        const meta = await getConvMeta(convId);
+        if (!meta) return;
 
         let sender = userCacheRef.current.get(msg.sender_id as string);
         if (!sender) {
           const { data, error } = await supabase
-            .from('users').select('id, username, avatar_url, last_seen_at')
+            .from('users').select('id, username, display_name, avatar_url, last_seen_at')
             .eq('id', msg.sender_id).single();
           if (error) { console.warn('Failed to fetch notification sender:', error.message); return; }
           if (data) {
@@ -207,23 +234,35 @@ export default function App() {
         if (!sender) return;
 
         const senderSnapshot = sender;
-        setUnreadCounts(prev => ({ ...prev, [msg.sender_id as string]: (prev[msg.sender_id as string] || 0) + 1 }));
+        setUnreadCounts(prev => ({ ...prev, [convId]: (prev[convId] || 0) + 1 }));
+
+        const senderLabel = senderSnapshot.displayName || `@${senderSnapshot.username}`;
+        const groupName = meta.name || 'Group chat';
+        const notifTitle = meta.isGroup ? groupName : senderLabel;
+        const notifAvatar = meta.isGroup ? (meta.avatarUrl ?? undefined) : senderSnapshot.avatarUrl;
+        const notifFallback = meta.isGroup ? groupName : senderLabel;
 
         // Browser push notification when tab is not focused
         if ('Notification' in window && Notification.permission === 'granted' && !document.hasFocus()) {
-          const body = msg.message_type === 'image' ? '📷 Image'
+          const bodyText = msg.message_type === 'image' ? '📷 Image'
             : msg.message_type === 'audio' ? '🎤 Voice message'
             : msg.message_type === 'video' ? '🎥 Video'
             : (msg.content as string) ?? '';
-          new Notification(senderSnapshot.displayName || `@${senderSnapshot.username}`, {
-            body, icon: senderSnapshot.avatarUrl || '/logo.png', badge: '/logo.png',
-            tag: senderSnapshot.id,
+          const body = meta.isGroup ? `${senderLabel}: ${bodyText}` : bodyText;
+          new Notification(notifTitle, {
+            body, icon: notifAvatar || '/logo.png', badge: '/logo.png',
+            tag: convId,
           });
         }
         const notifId = `${Date.now()}-${Math.random()}`;
         setNotifications(prev => [
           ...prev.slice(-4),
-          { id: notifId, sender: senderSnapshot, message: (msg.content as string) ?? '', messageType: (msg.message_type as string) ?? 'text' },
+          {
+            id: notifId, conversationId: convId, senderId: msg.sender_id as string, isGroup: meta.isGroup,
+            title: notifTitle, avatarUrl: notifAvatar, avatarFallback: notifFallback,
+            senderName: meta.isGroup ? senderLabel : undefined,
+            message: (msg.content as string) ?? '', messageType: (msg.message_type as string ?? 'text') as NotificationItem['messageType'],
+          },
         ]);
         setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notifId)), 5000);
       })
@@ -232,18 +271,41 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [user]);
 
-  const handleSelectPartner = async (partner: User) => {
-    setActivePartner(partner);
-    setUnreadCounts(prev => ({ ...prev, [partner.id]: 0 }));
-    setNotifications(prev => prev.filter(n => n.sender.id !== partner.id));
+  const handleSelectConversation = async (conv: ConversationSummary) => {
+    setActiveConversation(conv);
+    setUnreadCounts(prev => ({ ...prev, [conv.id]: 0 }));
+    setNotifications(prev => prev.filter(n => n.conversationId !== conv.id));
     if (isMobile) setMobileSidebarOpen(false);
     if (user) {
-      const chatId = [user.id, partner.id].sort().join('_');
       const { error } = await supabase.from('conversation_reads').upsert(
-        { user_id: user.id, conversation_id: chatId, last_read_at: new Date().toISOString() },
+        { user_id: user.id, conversation_id: conv.id, last_read_at: new Date().toISOString() },
         { onConflict: 'user_id,conversation_id' }
       );
       if (error) console.warn('Failed to mark conversation as read:', error.message);
+    }
+  };
+
+  const handleOpenNotification = (item: NotificationItem) => {
+    const meta = convCacheRef.current.get(item.conversationId);
+    if (meta?.isGroup) {
+      handleSelectConversation({
+        id: item.conversationId, isGroup: true,
+        name: meta.name || 'Group chat', avatarUrl: meta.avatarUrl ?? undefined,
+        subtitle: `${meta.participantIds.length} members`,
+        participantIds: meta.participantIds, updatedAt: new Date().toISOString(),
+        createdBy: meta.createdBy ?? undefined,
+      });
+    } else {
+      const sender = userCacheRef.current.get(item.senderId);
+      if (!sender) return;
+      handleSelectConversation({
+        id: item.conversationId, isGroup: false,
+        name: sender.displayName || `@${sender.username}`,
+        avatarUrl: sender.avatarUrl, subtitle: sender.displayName ? `@${sender.username}` : undefined,
+        partner: sender, participantIds: meta?.participantIds ?? [sender.id],
+        statusEmoji: sender.statusEmoji, statusText: sender.statusText,
+        updatedAt: new Date().toISOString(),
+      });
     }
   };
 
@@ -256,7 +318,7 @@ export default function App() {
     if (presenceChannelRef.current) await presenceChannelRef.current.untrack();
     const { error } = await supabase.auth.signOut();
     if (error) console.error('Sign out failed:', error.message);
-    setUser(null); setActivePartner(null); setUnreadCounts({});
+    setUser(null); setActiveConversation(null); setUnreadCounts({});
   };
 
   const handleAvatarUpdate = (avatarUrl: string) =>
@@ -264,7 +326,12 @@ export default function App() {
 
   const handleBackToSidebar = () => {
     setMobileSidebarOpen(true);
-    setActivePartner(null);
+    setActiveConversation(null);
+  };
+
+  const handleLeftGroup = () => {
+    setActiveConversation(null);
+    if (isMobile) setMobileSidebarOpen(true);
   };
 
   if (loading) return (
@@ -288,8 +355,8 @@ export default function App() {
       <div className="flex h-screen bg-[var(--bg)] overflow-hidden font-sans text-[var(--txt)]">
         <Sidebar
           currentUser={user}
-          activePartner={activePartner}
-          onSelectPartner={handleSelectPartner}
+          activeConversation={activeConversation}
+          onSelectConversation={handleSelectConversation}
           onLogout={handleLogout}
           onlineUserIds={onlineUserIds}
           onAvatarUpdate={handleAvatarUpdate}
@@ -301,15 +368,16 @@ export default function App() {
         {(!isMobile || !mobileSidebarOpen) && (
           <ChatArea
             currentUser={user}
-            partner={activePartner}
+            conversation={activeConversation}
             onlineUserIds={onlineUserIds}
             onBackToSidebar={isMobile ? handleBackToSidebar : undefined}
+            onLeftGroup={handleLeftGroup}
           />
         )}
         <Notifications
           items={notifications}
           onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}
-          onOpen={sender => handleSelectPartner(sender)}
+          onOpen={handleOpenNotification}
         />
       </div>
     </ErrorBoundary>

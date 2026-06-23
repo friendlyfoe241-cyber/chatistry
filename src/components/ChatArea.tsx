@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { User, Message, ReactionsMap, PinnedMessage } from '../types';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { User, Message, ReactionsMap, PinnedMessage, ConversationSummary, UserRow } from '../types';
 import {
   Send, MessageSquareDashed, Paperclip, X,
   Pencil, Trash2, Check, CheckCheck, ChevronDown, Play, CornerUpLeft, Smile,
-  Search, SearchX, Mic, Pin, PinOff, ArrowLeft, Forward,
+  Search, SearchX, Mic, Pin, PinOff, ArrowLeft, Forward, Info,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
@@ -13,14 +13,16 @@ import { EmojiPicker } from './EmojiPicker';
 import { VoiceRecorder } from './VoiceRecorder';
 import { LinkPreview } from './LinkPreview';
 import { ForwardModal } from './ForwardModal';
+import { GroupInfoModal } from './GroupInfoModal';
 
 const PAGE_SIZE = 50;
 
 interface ChatAreaProps {
   currentUser: User;
-  partner: User | null;
+  conversation: ConversationSummary | null;
   onlineUserIds: string[];
   onBackToSidebar?: () => void;
+  onLeftGroup?: () => void;
 }
 
 const EMOJI_SET = ['❤️', '👍', '😂', '😮', '😢', '😡', '🔥', '👏'];
@@ -28,6 +30,14 @@ const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_VIDEO_SIZE = 80 * 1024 * 1024;
 const ACCEPTED_IMAGE = ['image/jpeg','image/png','image/gif','image/webp'];
 const ACCEPTED_VIDEO = ['video/mp4','video/webm','video/ogg','video/quicktime','video/x-msvideo'];
+
+// A few distinct accent colors so multiple senders in a group are visually distinguishable.
+const SENDER_COLORS = ['text-cyan-400', 'text-violet-400', 'text-amber-400', 'text-rose-400', 'text-emerald-400', 'text-sky-400'];
+function colorForSender(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return SENDER_COLORS[hash % SENDER_COLORS.length];
+}
 
 function getMediaType(file: File): 'image' | 'video' | 'audio' | null {
   if (ACCEPTED_IMAGE.includes(file.type)) return 'image';
@@ -100,24 +110,29 @@ function playNotificationSound() {
 }
 
 // ── #5 Reaction tooltip — format reactor names ──
-function formatReactors(userIds: string[], currentUserId: string, partnerUsername: string): string {
-  const names = userIds.map(id =>
-    id === currentUserId ? 'You' : `@${partnerUsername}`
-  );
+function formatReactors(userIds: string[], getName: (id: string) => string): string {
+  const names = userIds.map(getName);
   if (names.length === 1) return names[0];
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-function mapRow(m: any, currentUserId: string, partnerId: string): Message {
+function mapRow(m: any): Message {
   return {
     id: m.id, senderId: m.sender_id,
-    receiverId: m.sender_id === currentUserId ? partnerId : currentUserId,
     content: m.content ?? '', timestamp: m.created_at,
     messageType: m.message_type ?? 'text', mediaUrl: m.image_url ?? undefined,
     isEdited: m.is_edited ?? false, originalContent: m.original_content ?? undefined,
     replyToId: m.reply_to_id ?? undefined, replyToContent: m.reply_to_content ?? undefined,
     replyToSenderId: m.reply_to_sender_id ?? undefined, replyToMessageType: m.reply_to_message_type ?? undefined,
+  };
+}
+
+function rowToUser(row: UserRow): User {
+  return {
+    id: row.id, username: row.username, displayName: row.display_name ?? undefined,
+    avatarUrl: row.avatar_url ?? undefined, lastSeenAt: row.last_seen_at ?? undefined,
+    statusEmoji: row.status_emoji ?? undefined, statusText: row.status_text ?? undefined,
   };
 }
 
@@ -127,6 +142,13 @@ function formatLastSeen(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function formatTypingLabel(names: string[]): string | null {
+  if (names.length === 0) return null;
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  return `${names.length} people are typing…`;
 }
 
 function AudioPlayer({ url }: { url: string }) {
@@ -172,11 +194,10 @@ function AudioPlayer({ url }: { url: string }) {
   );
 }
 
-export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar }: ChatAreaProps) {
+export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSidebar, onLeftGroup }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
   const [reactions, setReactions] = useState<Record<string, ReactionsMap>>({});
   const messagesRef = useRef<Message[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -208,7 +229,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   // ── NEW FEATURES ──
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [partnerLastRead, setPartnerLastRead] = useState<Date | null>(null);
+  const [otherReads, setOtherReads] = useState<Map<string, Date>>(new Map());
   const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
   const [pinnedMessage, setPinnedMessage] = useState<PinnedMessage | null>(null);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
@@ -234,17 +255,59 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
 
+  // ── Group chat state ──
+  const isGroup = conversation?.isGroup ?? false;
+  const [liveName, setLiveName] = useState(conversation?.name ?? '');
+  const [liveAvatarUrl, setLiveAvatarUrl] = useState(conversation?.avatarUrl);
+  const [liveParticipantIds, setLiveParticipantIds] = useState<string[]>(conversation?.participantIds ?? []);
+  const [liveCreatedBy, setLiveCreatedBy] = useState(conversation?.createdBy);
+  const [groupMembers, setGroupMembers] = useState<User[]>([]);
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [typingUserIds, setTypingUserIds] = useState<Set<string>>(new Set());
+  const typingTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const partner = conversation?.partner;
+  const chatId = conversation?.id ?? null;
+
+  // Fetch full member profiles whenever group membership changes
+  useEffect(() => {
+    if (!isGroup || liveParticipantIds.length === 0) { setGroupMembers([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('users').select('id, username, display_name, avatar_url, last_seen_at, status_emoji, status_text')
+        .in('id', liveParticipantIds);
+      if (error) { console.warn('Failed to load group members:', error.message); return; }
+      if (!cancelled && data) setGroupMembers((data as UserRow[]).map(rowToUser));
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGroup, liveParticipantIds.join(',')]);
+
+  const memberMap = useMemo(() => {
+    const map = new Map<string, User>();
+    map.set(currentUser.id, currentUser);
+    if (isGroup) groupMembers.forEach(m => map.set(m.id, m));
+    else if (partner) map.set(partner.id, partner);
+    return map;
+  }, [currentUser, isGroup, groupMembers, partner]);
+
+  const nameFor = useCallback((id: string): string => {
+    if (id === currentUser.id) return 'You';
+    const u = memberMap.get(id);
+    return u ? `@${u.username}` : 'someone';
+  }, [memberMap, currentUser.id]);
+
   const loadMore = useCallback(async () => {
-    if (!partner || loadingMoreRef.current || !hasMoreRef.current) return;
+    if (!chatId || loadingMoreRef.current || !hasMoreRef.current) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
-    const chatId = [currentUser.id, partner.id].sort().join('_');
     const { data } = await supabase.from('messages').select('*')
       .eq('conversation_id', chatId)
       .lt('created_at', oldestTimestampRef.current!)
       .order('created_at', { ascending: false }).limit(PAGE_SIZE);
     if (data) {
-      const older = data.reverse().map(m => mapRow(m, currentUser.id, partner.id));
+      const older = data.reverse().map(mapRow);
       setMessages(prev => [...older, ...prev]);
       hasMoreRef.current = data.length === PAGE_SIZE;
       setHasMore(data.length === PAGE_SIZE);
@@ -252,7 +315,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     }
     loadingMoreRef.current = false;
     setLoadingMore(false);
-  }, [partner, currentUser.id]);
+  }, [chatId]);
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current; if (!el) return;
@@ -274,7 +337,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('ring-2', 'ring-cyan-500/50', 'rounded-xl'); setTimeout(() => el.classList.remove('ring-2', 'ring-cyan-500/50', 'rounded-xl'), 1500); }
   };
 
-  useEffect(() => { if (partner) setTimeout(() => textareaRef.current?.focus(), 120); }, [partner]);
+  useEffect(() => { if (conversation) setTimeout(() => textareaRef.current?.focus(), 120); }, [conversation]);
   useEffect(() => { if (replyingTo) textareaRef.current?.focus(); }, [replyingTo]);
   useEffect(() => { if (isSearchOpen) setTimeout(() => searchInputRef.current?.focus(), 100); }, [isSearchOpen]);
 
@@ -286,29 +349,32 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   }, [emojiPickerFor]);
 
   useEffect(() => {
-    if (!partner) return;
-    setLoading(true); setMessages([]); setReactions({}); setIsTyping(false);
+    if (!conversation || !chatId) return;
+    setLoading(true); setMessages([]); setReactions({});
+    setTypingUserIds(new Set());
+    typingTimeoutsRef.current.forEach(t => clearTimeout(t)); typingTimeoutsRef.current.clear();
     setEditingId(null); setReplyingTo(null); setExpandedOriginals(new Set());
-    setPartnerLastRead(null); setPartnerLastSeen(null); setPinnedMessage(null);
+    setOtherReads(new Map()); setPartnerLastSeen(null); setPinnedMessage(null);
     setIsSearchOpen(false); setSearchQuery(''); setShowVoiceRecorder(false);
     setNewMsgCount(0); isAtBottomRef.current = true; setIsAtBottom(true);
     setFirstUnreadId(null); setHasMore(false); setLoadingMore(false);
     hasMoreRef.current = false; loadingMoreRef.current = false; oldestTimestampRef.current = null;
-
-    const chatId = [currentUser.id, partner.id].sort().join('_');
+    setLiveName(conversation.name); setLiveAvatarUrl(conversation.avatarUrl);
+    setLiveParticipantIds(conversation.participantIds); setLiveCreatedBy(conversation.createdBy);
+    setShowGroupInfo(false);
 
     const loadAll = async () => {
       // Messages — load newest PAGE_SIZE, descending then reverse
       const { data } = await supabase.from('messages').select('*')
         .eq('conversation_id', chatId).order('created_at', { ascending: false }).limit(PAGE_SIZE);
       if (data) {
-        const msgs = data.reverse().map(m => mapRow(m, currentUser.id, partner.id));
+        const msgs = data.reverse().map(mapRow);
         setMessages(msgs);
         hasMoreRef.current = data.length === PAGE_SIZE;
         setHasMore(data.length === PAGE_SIZE);
         if (msgs.length > 0) oldestTimestampRef.current = msgs[0].timestamp;
 
-        // Unread divider: find first partner message after my last read
+        // Unread divider: find first other-sender message after my last read
         const { data: myRead } = await supabase.from('conversation_reads')
           .select('last_read_at').eq('user_id', currentUser.id).eq('conversation_id', chatId).maybeSingle();
         if (myRead?.last_read_at) {
@@ -332,19 +398,25 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
         }
       }
 
-      // Partner's last read (for read receipts)
-      const { data: readData } = await supabase.from('conversation_reads')
-        .select('last_read_at').eq('user_id', partner.id).eq('conversation_id', chatId).single();
-      if (readData?.last_read_at) setPartnerLastRead(new Date(readData.last_read_at));
+      // Everyone else's last read (for read receipts — works for DMs and groups alike)
+      const { data: readsData } = await supabase.from('conversation_reads')
+        .select('user_id, last_read_at').eq('conversation_id', chatId).neq('user_id', currentUser.id);
+      if (readsData) {
+        const map = new Map<string, Date>();
+        readsData.forEach((r: { user_id: string; last_read_at: string }) => map.set(r.user_id, new Date(r.last_read_at)));
+        setOtherReads(map);
+      }
 
-      // Partner's last seen
-      const { data: userData } = await supabase.from('users')
-        .select('last_seen_at').eq('id', partner.id).single();
-      if (userData?.last_seen_at) setPartnerLastSeen(userData.last_seen_at);
+      // Partner's last seen (DM only)
+      if (!isGroup && partner) {
+        const { data: userData } = await supabase.from('users')
+          .select('last_seen_at').eq('id', partner.id).maybeSingle();
+        if (userData?.last_seen_at) setPartnerLastSeen(userData.last_seen_at);
+      }
 
       // Pinned message
       const { data: pinData } = await supabase.from('pinned_messages')
-        .select('*').eq('conversation_id', chatId).order('pinned_at', { ascending: false }).limit(1).single();
+        .select('*').eq('conversation_id', chatId).order('pinned_at', { ascending: false }).limit(1).maybeSingle();
       if (pinData) setPinnedMessage({
         id: pinData.id, messageId: pinData.message_id, conversationId: pinData.conversation_id,
         messageContent: pinData.message_content, messageType: pinData.message_type,
@@ -361,14 +433,14 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     const msgChannel = supabase.channel(`messages:${chatId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ new: m }) => {
-          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m, currentUser.id, partner.id)]);
+          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m)]);
           if (m.sender_id !== currentUser.id) {
             playNotificationSound();
             if (!isAtBottomRef.current) setNewMsgCount(prev => prev + 1);
           }
         })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
-        ({ new: m }) => setMessages(prev => prev.map(x => x.id === m.id ? mapRow(m, currentUser.id, partner.id) : x)))
+        ({ new: m }) => setMessages(prev => prev.map(x => x.id === m.id ? mapRow(m) : x)))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ old: m }) => setMessages(prev => prev.filter(x => x.id !== m.id)))
       .subscribe();
@@ -384,17 +456,27 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
         setReactions(prev => { const n = { ...prev }; if (!n[r.message_id]?.[r.emoji]) return prev; const f = n[r.message_id][r.emoji].filter(id => id !== r.user_id); if (f.length === 0) { const { [r.emoji]: _, ...rest } = n[r.message_id]; n[r.message_id] = rest; } else { n[r.message_id][r.emoji] = f; } return n; });
       }).subscribe();
 
-    // Typing
+    // Typing — generalized to track any number of other typists (works for DMs and groups)
     const typingChannel = supabase.channel(`typing:${chatId}`)
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
-        if (payload.userId === partner.id) { setIsTyping(true); if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000); }
+        const uid = payload.userId as string;
+        if (uid === currentUser.id) return;
+        setTypingUserIds(prev => new Set(prev).add(uid));
+        const timeouts = typingTimeoutsRef.current;
+        if (timeouts.has(uid)) clearTimeout(timeouts.get(uid)!);
+        timeouts.set(uid, setTimeout(() => {
+          setTypingUserIds(prev => { const n = new Set(prev); n.delete(uid); return n; });
+          timeouts.delete(uid);
+        }, 2000));
       }).subscribe();
     typingChannelRef.current = typingChannel;
 
-    // Read receipts realtime
+    // Read receipts realtime — any member's read row, not just one partner's
     const readsChannel = supabase.channel(`reads:${chatId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_reads' }, ({ new: r }) => {
-        if (r && r.user_id === partner.id && r.conversation_id === chatId) setPartnerLastRead(new Date(r.last_read_at));
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_reads', filter: `conversation_id=eq.${chatId}` }, ({ new: r }) => {
+        const row = r as { user_id: string; last_read_at: string } | undefined;
+        if (!row || row.user_id === currentUser.id) return;
+        setOtherReads(prev => new Map(prev).set(row.user_id, new Date(row.last_read_at)));
       }).subscribe();
 
     // Pinned messages realtime
@@ -406,15 +488,29 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
         if (p.conversation_id === chatId) setPinnedMessage(null);
       }).subscribe();
 
+    // Conversation metadata realtime — group renames/avatar/membership changes (or deletion)
+    const convChannel = supabase.channel(`conv-meta:${chatId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations', filter: `id=eq.${chatId}` }, ({ new: row }) => {
+        setLiveName(row.name ?? ''); setLiveAvatarUrl(row.avatar_url ?? undefined);
+        setLiveParticipantIds(row.participants ?? []); setLiveCreatedBy(row.created_by ?? undefined);
+        if (row.is_group && !(row.participants ?? []).includes(currentUser.id)) onLeftGroup?.();
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'conversations', filter: `id=eq.${chatId}` }, () => {
+        onLeftGroup?.();
+      }).subscribe();
+
     return () => {
       supabase.removeChannel(msgChannel); supabase.removeChannel(rxChannel);
-      supabase.removeChannel(typingChannel); supabase.removeChannel(readsChannel); supabase.removeChannel(pinChannel);
+      supabase.removeChannel(typingChannel); supabase.removeChannel(readsChannel);
+      supabase.removeChannel(pinChannel); supabase.removeChannel(convChannel);
       typingChannelRef.current = null;
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutsRef.current.forEach(t => clearTimeout(t)); typingTimeoutsRef.current.clear();
     };
-  }, [partner, currentUser.id, scrollToBottom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId, currentUser.id, scrollToBottom]);
 
-  // Auto-scroll: always on own messages, only if at bottom for partner messages
+  // Auto-scroll: always on own messages, only if at bottom for others' messages
   useEffect(() => {
     const last = messages[messages.length - 1];
     if (!last) return;
@@ -424,11 +520,12 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
     }
   }, [messages]);
 
-  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(); }, [isTyping]);
+  const typingLabel = useMemo(() => formatTypingLabel(Array.from(typingUserIds).map(nameFor)), [typingUserIds, nameFor]);
+  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(); }, [typingLabel]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-    if (partner && typingChannelRef.current)
+    if (conversation && typingChannelRef.current)
       typingChannelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUser.id } });
   };
 
@@ -466,28 +563,29 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
 
   const cancelMedia = () => { setMediaFile(null); setMediaPreview(null); setMediaType(null); if (fileInputRef.current) fileInputRef.current.value = ''; };
 
-  const ensureConversation = async (chatId: string) => {
-    const { data } = await supabase.from('conversations').select('id').eq('id', chatId).single();
-    if (!data) await supabase.from('conversations').insert({ id: chatId, participants: [currentUser.id, partner!.id], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+  // Groups are created up front (via the New Group flow), so this only ever needs to lazily
+  // create the row for a brand-new DM — a group conversation always already exists.
+  const ensureConversation = async (id: string) => {
+    if (isGroup) return;
+    const { data } = await supabase.from('conversations').select('id').eq('id', id).single();
+    if (!data) await supabase.from('conversations').insert({ id, participants: [currentUser.id, partner!.id], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
   };
-  const bumpConversation = (chatId: string) => supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', chatId);
+  const bumpConversation = (id: string) => supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', id);
   const buildReplyPayload = () => replyingTo ? { reply_to_id: replyingTo.id, reply_to_sender_id: replyingTo.senderId, reply_to_message_type: replyingTo.messageType, reply_to_content: replyingTo.messageType === 'text' ? replyingTo.content : replyingTo.messageType === 'image' ? '📷 Image' : replyingTo.messageType === 'audio' ? '🎤 Voice' : '🎥 Video' } : {};
 
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !partner) return;
+    if (!input.trim() || !chatId) return;
     const text = input.trim(); setInput(''); setReplyingTo(null);
-    const chatId = [currentUser.id, partner.id].sort().join('_');
     await ensureConversation(chatId);
     await supabase.from('messages').insert({ conversation_id: chatId, sender_id: currentUser.id, content: text, message_type: 'text', created_at: new Date().toISOString(), ...buildReplyPayload() });
     await bumpConversation(chatId);
   };
 
   const handleSendMedia = async () => {
-    if (!mediaFile || !mediaType || !partner || uploading) return;
+    if (!mediaFile || !mediaType || !chatId || uploading) return;
     setUploading(true);
     try {
-      const chatId = [currentUser.id, partner.id].sort().join('_');
       await ensureConversation(chatId);
       const ext = mediaFile.name.split('.').pop();
       const path = `${chatId}/${Date.now()}.${ext}`;
@@ -502,10 +600,9 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   };
 
   const handleSendVoice = async (file: File) => {
-    if (!partner) return;
+    if (!chatId) return;
     setShowVoiceRecorder(false);
     try {
-      const chatId = [currentUser.id, partner.id].sort().join('_');
       await ensureConversation(chatId);
       const path = `${chatId}/${file.name}`;
       const { error } = await supabase.storage.from('chat-images').upload(path, file);
@@ -536,8 +633,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   };
 
   const handlePinMessage = async (msg: Message) => {
-    if (!partner) return;
-    const chatId = [currentUser.id, partner.id].sort().join('_');
+    if (!chatId) return;
     if (pinnedMessage?.messageId === msg.id) {
       // Optimistic update first — don't wait for realtime
       const id = pinnedMessage.id;
@@ -556,20 +652,23 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
   const toggleOriginal = (id: string) => setExpandedOriginals(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
 
   const getReplyLabel = (msg: Message): string => {
-    const senderName = msg.senderId === currentUser.id ? 'You' : `@${partner?.username}`;
+    const senderName = nameFor(msg.senderId);
     if (msg.replyToSenderId === msg.senderId) return `${senderName} replied to ${msg.senderId === currentUser.id ? 'yourself' : 'themselves'}`;
-    if (msg.senderId === currentUser.id && msg.replyToSenderId === partner?.id) return `You replied to @${partner?.username}`;
-    if (msg.senderId === partner?.id && msg.replyToSenderId === currentUser.id) return `@${partner?.username} replied to you`;
-    return `${senderName} replied`;
+    if (msg.senderId === currentUser.id) return `You replied to ${nameFor(msg.replyToSenderId!)}`;
+    if (msg.replyToSenderId === currentUser.id) return `${senderName} replied to you`;
+    return `${senderName} replied to ${nameFor(msg.replyToSenderId!)}`;
   };
 
   const displayMessages = isSearchOpen && searchQuery.trim()
     ? messages.filter(m => m.messageType === 'text' && m.content.toLowerCase().includes(searchQuery.toLowerCase()))
     : messages;
 
-  const isPartnerOnline = partner ? onlineUserIds.includes(partner.id) : false;
+  const isPartnerOnline = !isGroup && partner ? onlineUserIds.includes(partner.id) : false;
+  const onlineMembersCount = isGroup
+    ? liveParticipantIds.filter(id => id !== currentUser.id && onlineUserIds.includes(id)).length
+    : 0;
 
-  if (!partner) {
+  if (!conversation || !chatId) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--txt3)]">
         {onBackToSidebar && (
@@ -580,7 +679,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
         )}
         <MessageSquareDashed className="w-16 h-16 mb-4 opacity-30" />
         <h2 className="text-xl font-medium text-[var(--txt)]">No chat selected</h2>
-        <p className="text-sm mt-2 text-center px-6">Search for a user or pick a recent chat.</p>
+        <p className="text-sm mt-2 text-center px-6">Search for a user, pick a recent chat, or start a group.</p>
         {onBackToSidebar && (
           <button onClick={onBackToSidebar}
             className="mt-6 px-5 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-black text-sm font-medium transition-colors">
@@ -590,6 +689,11 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
       </div>
     );
   }
+
+  const headerAvatarUser = isGroup ? ({ id: chatId, username: liveName, avatarUrl: liveAvatarUrl } as User) : partner!;
+  const headerName = isGroup ? liveName : (partner?.displayName || `@${partner?.username}`);
+  const firstTyperId = Array.from(typingUserIds)[0];
+  const firstTyper = firstTyperId ? memberMap.get(firstTyperId) : undefined;
 
   return (
     <div className="flex-1 flex flex-col bg-[var(--bg)] max-h-screen text-[var(--txt)]">
@@ -604,24 +708,45 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
             <ArrowLeft className="w-5 h-5" />
           </button>
         )}
-        <Avatar user={partner} size="md" />
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold truncate">{partner.displayName || `@${partner.username}`}</div>
-          <div className="text-[10px] flex items-center gap-1.5 flex-wrap">
-            {partner.displayName && <span className="text-[var(--txt3)]">@{partner.username}</span>}
-            {(partner.statusEmoji || partner.statusText) && (
-              <span className="text-[var(--txt3)]">{partner.statusEmoji} {partner.statusText}</span>
-            )}
-            {!partner.statusText && (isPartnerOnline
-              ? <span className="text-green-400 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-400 rounded-full inline-block" />Online</span>
-              : partnerLastSeen
-                ? <span className="text-[var(--txt3)]">Last seen {formatLastSeen(partnerLastSeen)}</span>
-                : <span className="text-[var(--txt3)]">Offline</span>
-            )}
+        <button
+          onClick={() => isGroup && setShowGroupInfo(true)}
+          className={cn('flex items-center gap-3 flex-1 min-w-0 text-left', isGroup ? 'cursor-pointer' : 'cursor-default')}
+        >
+          <Avatar user={headerAvatarUser} size="md" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold truncate">{headerName}</div>
+            <div className="text-[10px] flex items-center gap-1.5 flex-wrap">
+              {isGroup ? (
+                <>
+                  <span className="text-[var(--txt3)]">{liveParticipantIds.length} members</span>
+                  {onlineMembersCount > 0 && <span className="text-green-400">· {onlineMembersCount} online</span>}
+                </>
+              ) : (
+                <>
+                  {partner?.displayName && <span className="text-[var(--txt3)]">@{partner.username}</span>}
+                  {(partner?.statusEmoji || partner?.statusText) && (
+                    <span className="text-[var(--txt3)]">{partner.statusEmoji} {partner.statusText}</span>
+                  )}
+                  {!partner?.statusText && (isPartnerOnline
+                    ? <span className="text-green-400 flex items-center gap-1"><span className="w-1.5 h-1.5 bg-green-400 rounded-full inline-block" />Online</span>
+                    : partnerLastSeen
+                      ? <span className="text-[var(--txt3)]">Last seen {formatLastSeen(partnerLastSeen)}</span>
+                      : <span className="text-[var(--txt3)]">Offline</span>
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-        {!isPartnerOnline && !partnerLastSeen && (
+        </button>
+        {!isGroup && !isPartnerOnline && !partnerLastSeen && (
           <div className="ml-1 px-2 py-0.5 rounded bg-cyan-900/20 border border-cyan-800/40 text-[10px] text-cyan-400 font-mono">LIVE</div>
+        )}
+        {isGroup && (
+          <button onClick={() => setShowGroupInfo(true)}
+            className="w-8 h-8 rounded-lg border border-[var(--border)] flex items-center justify-center text-[var(--txt3)] hover:text-cyan-400 hover:border-cyan-800 transition-colors flex-shrink-0"
+            title="Group info">
+            <Info className="w-4 h-4" />
+          </button>
         )}
         <button onClick={() => { setIsSearchOpen(o => !o); setSearchQuery(''); }}
           className={cn('w-8 h-8 rounded-lg border flex items-center justify-center transition-colors flex-shrink-0',
@@ -680,7 +805,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
         ) : displayMessages.length === 0 ? (
           <div className="flex flex-col items-center opacity-30 mt-20">
             <p className="text-[var(--txt2)]">
-              {isSearchOpen && searchQuery ? `No messages matching "${searchQuery}"` : `Say hello to @${partner.username}!`}
+              {isSearchOpen && searchQuery ? `No messages matching "${searchQuery}"` : isGroup ? `Say hello to ${liveName}!` : `Say hello to @${partner?.username}!`}
             </p>
           </div>
         ) : (
@@ -706,9 +831,14 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
               const msgReactions = reactions[msg.id] ?? {};
               const hasReactions = Object.keys(msgReactions).length > 0;
               const quotedIsMe = msg.replyToSenderId === currentUser.id;
-              const isRead = isMe && partnerLastRead && new Date(partnerLastRead) >= new Date(msg.timestamp);
+              const isRead = isMe && Array.from(otherReads.values()).some(d => d >= new Date(msg.timestamp));
+              const readByNames = isMe && isGroup
+                ? Array.from(otherReads.entries()).filter(([, d]) => d >= new Date(msg.timestamp)).map(([id]) => nameFor(id))
+                : [];
               const firstUrl = msg.messageType === 'text' && msg.content ? extractFirstUrl(msg.content) : null;
               const isPinned = pinnedMessage?.messageId === msg.id;
+              const sender = isMe ? currentUser : (memberMap.get(msg.senderId) ?? { id: msg.senderId, username: 'unknown' } as User);
+              const showSenderLabel = isGroup && !isMe && !grouped;
 
               return (
                 <motion.div key={msg.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
@@ -731,6 +861,13 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                     </div>
                   )}
 
+                  {/* Sender name label (group chats only) */}
+                  {showSenderLabel && (
+                    <div className={cn('text-[11px] font-medium mb-1 pl-12', colorForSender(msg.senderId))}>
+                      {sender.displayName || `@${sender.username}`}
+                    </div>
+                  )}
+
                   {/* Row */}
                   <div className={cn('flex items-end gap-2', isMe ? 'flex-row-reverse' : 'flex-row')}
                     onMouseEnter={() => setHoveredId(msg.id)}
@@ -738,7 +875,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
 
                     {/* Avatar */}
                     <div className="flex-shrink-0 self-end mb-1">
-                      {grouped ? <div className="w-10 h-10" /> : <Avatar user={isMe ? currentUser : partner} size="md" isCurrentUser={isMe} />}
+                      {grouped ? <div className="w-10 h-10" /> : <Avatar user={sender} size="md" isCurrentUser={isMe} />}
                     </div>
 
                     {/* Bubble column */}
@@ -803,7 +940,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                         <div className={cn('flex flex-wrap gap-1 mt-1.5', isMe ? 'justify-end' : 'justify-start')}>
                           {Object.entries(msgReactions).map(([emoji, userIds]) => {
                             const mine = userIds.includes(currentUser.id);
-                            const tooltip = formatReactors(userIds, currentUser.id, partner.username);
+                            const tooltip = formatReactors(userIds, nameFor);
                             return (
                               <button key={emoji} onClick={() => toggleReaction(msg.id, emoji)}
                                 title={tooltip}
@@ -841,7 +978,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
                         <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         {isMe && !isEditing && (
                           isRead
-                            ? <CheckCheck className="w-3 h-3 text-cyan-400" />
+                            ? <span title={readByNames.length ? `Read by ${readByNames.join(', ')}` : 'Read'}><CheckCheck className="w-3 h-3 text-cyan-400" /></span>
                             : <Check className="w-3 h-3 text-[var(--txt4)]" />
                         )}
                       </div>
@@ -902,13 +1039,16 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
             })}
 
             {/* Typing indicator */}
-            {isTyping && (
-              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex items-end gap-2 mt-4">
-                <Avatar user={partner} size="md" />
-                <div className="px-4 py-3 bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl flex gap-1.5 items-center">
-                  <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                  <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                  <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce" />
+            {typingLabel && (
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-1 mt-4">
+                {isGroup && <span className="text-[10px] text-[var(--txt3)] pl-12">{typingLabel}</span>}
+                <div className="flex items-end gap-2">
+                  <Avatar user={firstTyper ?? partner ?? ({ id: firstTyperId ?? 'unknown', username: '?' } as User)} size="md" />
+                  <div className="px-4 py-3 bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl flex gap-1.5 items-center">
+                    <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <div className="w-1.5 h-1.5 bg-cyan-500/70 rounded-full animate-bounce" />
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -941,7 +1081,7 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
               <div className="w-0.5 self-stretch bg-cyan-500 rounded-full shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-[10px] text-cyan-400 font-medium mb-0.5">
-                  Replying to {replyingTo.senderId === currentUser.id ? 'yourself' : `@${partner.username}`}
+                  Replying to {replyingTo.senderId === currentUser.id ? 'yourself' : nameFor(replyingTo.senderId)}
                 </div>
                 <div className="text-xs text-[var(--txt3)] truncate">
                   {replyingTo.messageType === 'image' ? '📷 Image' : replyingTo.messageType === 'video' ? '🎥 Video' : replyingTo.messageType === 'audio' ? '🎤 Voice' : replyingTo.content}
@@ -1037,8 +1177,25 @@ export function ChatArea({ currentUser, partner, onlineUserIds, onBackToSidebar 
           <ForwardModal
             message={forwardingMsg}
             currentUser={currentUser}
-            currentPartnerId={partner.id}
+            excludeConversationId={chatId}
             onClose={() => setForwardingMsg(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Group info modal */}
+      <AnimatePresence>
+        {isGroup && showGroupInfo && (
+          <GroupInfoModal
+            conversationId={chatId}
+            name={liveName}
+            avatarUrl={liveAvatarUrl}
+            createdBy={liveCreatedBy}
+            currentUser={currentUser}
+            members={groupMembers}
+            onlineUserIds={onlineUserIds}
+            onClose={() => setShowGroupInfo(false)}
+            onLeft={() => { setShowGroupInfo(false); onLeftGroup?.(); }}
           />
         )}
       </AnimatePresence>

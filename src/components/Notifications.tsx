@@ -6,9 +6,15 @@ import { User } from '../types';
 
 export interface NotificationItem {
   id: string;
-  sender: User;
+  conversationId: string;
+  senderId: string;
+  isGroup: boolean;
+  title: string;            // sender's name for a DM, group name for a group
+  avatarUrl?: string;       // sender's avatar for a DM, group avatar for a group
+  avatarFallback: string;   // text used for initials when no avatarUrl
+  senderName?: string;      // shown as a prefix in group notifications, e.g. "Sam: "
   message: string;
-  messageType: 'text' | 'image';
+  messageType: 'text' | 'image' | 'video' | 'audio';
 }
 
 function ProgressBar() {
@@ -34,6 +40,12 @@ function Toast({
   onDismiss: () => void;
   onOpen: () => void;
 }) {
+  const avatarUser = { id: item.conversationId, username: item.avatarFallback, avatarUrl: item.avatarUrl } as User;
+  const mediaLabel = item.messageType === 'image' ? 'Sent an image'
+    : item.messageType === 'video' ? 'Sent a video'
+    : item.messageType === 'audio' ? 'Sent a voice message'
+    : null;
+
   return (
     <motion.div
       layout
@@ -45,14 +57,15 @@ function Toast({
     >
       <div className="p-3.5 flex items-start gap-3">
         <div className="relative flex-shrink-0">
-          <Avatar user={item.sender} size="sm" />
+          <Avatar user={avatarUser} size="sm" />
           <div className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-500 border-2 border-[#1C1C1C]" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-semibold text-[#E0E0E0] leading-none mb-1">@{item.sender.username}</div>
+          <div className="text-xs font-semibold text-[#E0E0E0] leading-none mb-1 truncate">{item.title}</div>
           <div className="text-xs text-[#888] truncate leading-snug">
-            {item.messageType !== 'text'
-              ? <span className="flex items-center gap-1"><ImageIcon className="w-3 h-3 inline" /> Sent an image</span>
+            {item.senderName && <span className="text-[#aaa]">{item.senderName}: </span>}
+            {mediaLabel
+              ? <span className="inline-flex items-center gap-1"><ImageIcon className="w-3 h-3 inline" /> {mediaLabel}</span>
               : item.message.length > 70 ? item.message.slice(0, 70) + '…' : item.message}
           </div>
         </div>
@@ -71,7 +84,7 @@ function Toast({
 interface NotificationsProps {
   items: NotificationItem[];
   onDismiss: (id: string) => void;
-  onOpen: (sender: User) => void;
+  onOpen: (item: NotificationItem) => void;
 }
 
 export function Notifications({ items, onDismiss, onOpen }: NotificationsProps) {
@@ -83,7 +96,7 @@ export function Notifications({ items, onDismiss, onOpen }: NotificationsProps) 
             <Toast
               item={item}
               onDismiss={() => onDismiss(item.id)}
-              onOpen={() => { onOpen(item.sender); onDismiss(item.id); }}
+              onOpen={() => { onOpen(item); onDismiss(item.id); }}
             />
           </div>
         ))}

@@ -12,7 +12,6 @@ export interface User {
 export interface Message {
   id: string;
   senderId: string;
-  receiverId: string;
   content: string;
   timestamp: string;
   messageType: 'text' | 'image' | 'video' | 'audio';
@@ -35,6 +34,24 @@ export interface PinnedMessage {
   messageType: 'text' | 'image' | 'video' | 'audio';
   pinnedBy: string;
   pinnedAt: string;
+}
+
+// A single item in the sidebar chat list — either a 1:1 DM or a group chat.
+// `id` always equals the underlying conversations.id row, so it can be used
+// directly as the realtime/unread-count/read-receipt key for both kinds.
+export interface ConversationSummary {
+  id: string;
+  isGroup: boolean;
+  name: string;                 // resolved display name (group name, or partner's name)
+  avatarUrl?: string;           // group avatar, or partner's avatar
+  subtitle?: string;            // "@username" for DM, "N members" for group
+  participantIds: string[];
+  updatedAt: string;
+  createdBy?: string;           // group creator (group admin) — undefined for DMs
+  // DM-only:
+  partner?: User;
+  statusEmoji?: string;
+  statusText?: string;
 }
 
 // ── Database row shapes ──────────────────────────────────────────
@@ -68,6 +85,10 @@ export interface ConversationRow {
   id: string;
   participants: string[];
   updated_at: string;
+  is_group: boolean;
+  name: string | null;
+  avatar_url: string | null;
+  created_by: string | null;
 }
 
 export interface ReactionRow {
@@ -93,6 +114,6 @@ export interface PinnedMessageRow {
 }
 
 export interface UnreadCountRow {
-  partner_id: string;
+  conversation_id: string;
   unread_count: number;
 }

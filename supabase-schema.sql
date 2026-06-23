@@ -197,32 +197,35 @@ CREATE POLICY IF NOT EXISTS "Users manage pinned convos" ON public.user_pinned_c
 -- ================================================================
 -- MIGRATION: get_unread_counts RPC — eliminates N+1 query problem
 -- Replaces the per-conversation message count loop in App.tsx with
--- a single database call.
+-- a single database call. Keyed by conversation_id (not partner_id)
+-- so it works uniformly for 1:1 DMs and group chats — see the group
+-- chat migration further down for why this changed.
 -- ================================================================
 
-CREATE OR REPLACE FUNCTION get_unread_counts(p_user_id uuid)
-RETURNS TABLE(partner_id text, unread_count bigint)
+DROP FUNCTION IF EXISTS public.get_unread_counts(uuid);
+
+CREATE FUNCTION public.get_unread_counts(p_user_id uuid)
+RETURNS TABLE(conversation_id text, unread_count bigint)
 LANGUAGE sql
-SECURITY DEFINER
-STABLE
+STABLE SECURITY DEFINER
 AS $$
   SELECT
-    (SELECT p FROM unnest(c.participants) p WHERE p <> p_user_id::text LIMIT 1) AS partner_id,
+    c.id AS conversation_id,
     COUNT(m.id)::bigint AS unread_count
   FROM conversations c
   JOIN messages m ON m.conversation_id = c.id
   LEFT JOIN conversation_reads cr
     ON cr.conversation_id = c.id AND cr.user_id = p_user_id
   WHERE
-    p_user_id::text = ANY(c.participants)
+    p_user_id = ANY(c.participants)
     AND m.sender_id <> p_user_id
     AND m.created_at > COALESCE(cr.last_read_at, '1970-01-01'::timestamptz)
-  GROUP BY c.id, c.participants
+  GROUP BY c.id
   HAVING COUNT(m.id) > 0;
 $$;
 
 -- Grant execution to authenticated users
-GRANT EXECUTE ON FUNCTION get_unread_counts(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_unread_counts(uuid) TO authenticated;
 
 -- ================================================================
 -- MIGRATION: display names, status, and rate limiting
@@ -254,3 +257,149 @@ DROP TRIGGER IF EXISTS messages_rate_limit ON public.messages;
 CREATE TRIGGER messages_rate_limit
   BEFORE INSERT ON public.messages
   FOR EACH ROW EXECUTE FUNCTION enforce_rate_limit();
+
+-- ================================================================
+-- MIGRATION: group chats
+--
+-- Groups reuse the existing `conversations` table and its
+-- `participants uuid[]` column rather than introducing a separate
+-- membership table — every existing RLS policy, the messages table,
+-- reactions, pins, and reads all key off conversation_id already, so
+-- this is the minimal change that makes the whole feature set (pins,
+-- reactions, replies, read receipts, search, forwarding...) "just work"
+-- for groups too. Group conversation ids are generated client-side as
+-- 'group_' || uuid; DM ids stay the existing sorted-pair scheme.
+-- ================================================================
+
+ALTER TABLE public.conversations
+  ADD COLUMN IF NOT EXISTS is_group boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS name text,
+  ADD COLUMN IF NOT EXISTS avatar_url text,
+  ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES public.users(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_is_group ON public.conversations (is_group);
+
+COMMENT ON COLUMN public.conversations.is_group IS 'true for group chats, false for 1:1 DMs';
+COMMENT ON COLUMN public.conversations.name IS 'Group display name (null for DMs)';
+COMMENT ON COLUMN public.conversations.avatar_url IS 'Group avatar image (null for DMs)';
+COMMENT ON COLUMN public.conversations.created_by IS 'User who created the group; has admin rights (rename/avatar/remove members) — enforced client-side and in remove_group_member()';
+
+-- Existing conversation_reads policies only let a user see their OWN read row,
+-- so the partner's (or, for groups, any other member's) last_read_at could never
+-- actually be fetched — the "read" double-checkmark could never light up. Add a
+-- permissive SELECT-only policy so any participant of a conversation can see all
+-- read rows for that conversation; writes remain restricted to one's own row.
+CREATE POLICY IF NOT EXISTS "Conversation participants can view all reads" ON public.conversation_reads
+FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM public.conversations c
+    WHERE c.id = conversation_reads.conversation_id
+      AND auth.uid() = ANY(c.participants)
+  )
+);
+
+-- Atomic, permission-checked group membership management.
+-- Both are SECURITY DEFINER (bypass RLS), so authorization is hand-checked inside:
+--   add_group_member    — any current member may add someone new
+--   remove_group_member — a member may remove themself (leave); only the
+--                         creator may remove someone else. Deletes the
+--                         conversation if it would end up with no members.
+CREATE OR REPLACE FUNCTION public.add_group_member(p_conversation_id text, p_new_member uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_participants uuid[];
+  v_is_group boolean;
+BEGIN
+  SELECT participants, is_group INTO v_participants, v_is_group
+  FROM conversations WHERE id = p_conversation_id;
+
+  IF v_participants IS NULL THEN
+    RAISE EXCEPTION 'Conversation not found';
+  END IF;
+  IF NOT v_is_group THEN
+    RAISE EXCEPTION 'Not a group conversation';
+  END IF;
+  IF NOT (auth.uid() = ANY(v_participants)) THEN
+    RAISE EXCEPTION 'Only group members can add members';
+  END IF;
+  IF p_new_member = ANY(v_participants) THEN
+    RETURN; -- already a member, no-op
+  END IF;
+
+  UPDATE conversations
+  SET participants = array_append(participants, p_new_member), updated_at = now()
+  WHERE id = p_conversation_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.add_group_member(text, uuid) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.remove_group_member(p_conversation_id text, p_member uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_participants uuid[];
+  v_is_group boolean;
+  v_created_by uuid;
+  v_new_participants uuid[];
+BEGIN
+  SELECT participants, is_group, created_by INTO v_participants, v_is_group, v_created_by
+  FROM conversations WHERE id = p_conversation_id;
+
+  IF v_participants IS NULL THEN
+    RAISE EXCEPTION 'Conversation not found';
+  END IF;
+  IF NOT v_is_group THEN
+    RAISE EXCEPTION 'Not a group conversation';
+  END IF;
+  IF NOT (auth.uid() = ANY(v_participants)) THEN
+    RAISE EXCEPTION 'Only group members can do this';
+  END IF;
+  IF NOT (auth.uid() = p_member OR auth.uid() = v_created_by) THEN
+    RAISE EXCEPTION 'Only the group creator can remove other members';
+  END IF;
+
+  v_new_participants := array_remove(v_participants, p_member);
+
+  IF array_length(v_new_participants, 1) IS NULL OR array_length(v_new_participants, 1) = 0 THEN
+    DELETE FROM conversations WHERE id = p_conversation_id;
+  ELSE
+    UPDATE conversations
+    SET participants = v_new_participants, updated_at = now()
+    WHERE id = p_conversation_id;
+  END IF;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.remove_group_member(text, uuid) TO authenticated;
+
+-- Group avatars live at avatars/groups/{conversation_id}/avatar.{ext}.
+-- Only current members of that group may upload/update its avatar.
+CREATE POLICY IF NOT EXISTS "Group members upload group avatar" ON storage.objects
+FOR INSERT WITH CHECK (
+  bucket_id = 'avatars'
+  AND (storage.foldername(name))[1] = 'groups'
+  AND EXISTS (
+    SELECT 1 FROM public.conversations c
+    WHERE c.id = (storage.foldername(name))[2]
+      AND auth.uid() = ANY(c.participants)
+  )
+);
+
+CREATE POLICY IF NOT EXISTS "Group members update group avatar" ON storage.objects
+FOR UPDATE USING (
+  bucket_id = 'avatars'
+  AND (storage.foldername(name))[1] = 'groups'
+  AND EXISTS (
+    SELECT 1 FROM public.conversations c
+    WHERE c.id = (storage.foldername(name))[2]
+      AND auth.uid() = ANY(c.participants)
+  )
+);
