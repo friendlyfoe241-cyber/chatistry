@@ -251,8 +251,8 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
 
   // ── #3 New messages jump button ──
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isAtTopRef = useRef(true);  // Instagram-style: tracks if user is at the top (newest messages)
-  const [isAtTop, setIsAtTop] = useState(true);
+  const isAtBottomRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
 
   // ── Group chat state ──
@@ -308,14 +308,14 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     const { data } = await supabase.from('messages').select('*')
       .eq('conversation_id', chatId)
       .lt('created_at', oldestTimestampRef.current!)
-      .order('created_at', { ascending: false }).limit(PAGE_SIZE);
+      .order('created_at', { ascending: true }).limit(PAGE_SIZE);
     if (data) {
-      // Keep messages in reverse chronological order (newest at top)
+      // Prepend older messages (oldest at top, newest at bottom)
       const older = data.map(mapRow);
-      setMessages(prev => [...prev, ...older]);
+      setMessages(prev => [...older, ...prev]);
       hasMoreRef.current = data.length === PAGE_SIZE;
       setHasMore(data.length === PAGE_SIZE);
-      if (older.length > 0) oldestTimestampRef.current = older[older.length - 1].timestamp;
+      if (older.length > 0) oldestTimestampRef.current = older[0].timestamp;
     }
     loadingMoreRef.current = false;
     setLoadingMore(false);
@@ -323,22 +323,21 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current; if (!el) return;
-    // Instagram-style: user is at top when scrollTop is near 0 (newest messages visible)
-    const atTop = el.scrollTop < 120;
-    isAtTopRef.current = atTop;
-    setIsAtTop(atTop);
-    if (atTop) setNewMsgCount(0);
-    // Load more when user scrolls to top to see older messages
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+    if (atBottom) setNewMsgCount(0);
+    // Load more when user scrolls to top (near the start of the scroll)
     if (el.scrollTop < 80) loadMore();
   }, [loadMore]);
 
-  const startRef = useRef<HTMLDivElement>(null);  // Reference to top of messages (newest)
+  const endRef = useRef<HTMLDivElement>(null);  // Reference to bottom (newest messages)
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // Instagram-style: scroll to top (newest messages) instead of bottom
-  const scrollToTop = useCallback(() => { startRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
+  // Scroll to bottom (newest messages)
+  const scrollToBottom = useCallback(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
   const scrollToMessage = (id: string) => {
     const el = messageRefs.current.get(id);
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('ring-2', 'ring-cyan-500/50', 'rounded-xl'); setTimeout(() => el.classList.remove('ring-2', 'ring-cyan-500/50', 'rounded-xl'), 1500); }
@@ -363,7 +362,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     setEditingId(null); setReplyingTo(null); setExpandedOriginals(new Set());
     setOtherReads(new Map()); setPartnerLastSeen(null); setPinnedMessage(null);
     setIsSearchOpen(false); setSearchQuery(''); setShowVoiceRecorder(false);
-    setNewMsgCount(0); isAtTopRef.current = true; setIsAtTop(true);
+    setNewMsgCount(0); isAtBottomRef.current = true; setIsAtBottom(true);
     setFirstUnreadId(null); setHasMore(false); setLoadingMore(false);
     hasMoreRef.current = false; loadingMoreRef.current = false; 
     oldestTimestampRef.current = null; newestTimestampRef.current = null;
@@ -372,18 +371,18 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     setShowGroupInfo(false);
 
     const loadAll = async () => {
-      // Messages — load newest PAGE_SIZE, keep in reverse chronological order (newest first)
+      // Messages — load newest PAGE_SIZE, oldest first at top, newest at bottom
       const { data } = await supabase.from('messages').select('*')
         .eq('conversation_id', chatId).order('created_at', { ascending: false }).limit(PAGE_SIZE);
       if (data) {
-        // Keep messages in reverse chronological order (newest first / at top)
-        const msgs = data.map(mapRow);
+        // Reverse to get ascending order (oldest first at top, newest at bottom)
+        const msgs = data.reverse().map(mapRow);
         setMessages(msgs);
         hasMoreRef.current = data.length === PAGE_SIZE;
         setHasMore(data.length === PAGE_SIZE);
         if (msgs.length > 0) {
-          newestTimestampRef.current = msgs[0].timestamp;  // newest
-          oldestTimestampRef.current = msgs[msgs.length - 1].timestamp;  // oldest in this batch
+          newestTimestampRef.current = msgs[msgs.length - 1].timestamp;  // newest
+          oldestTimestampRef.current = msgs[0].timestamp;  // oldest in this batch
         }
 
         // Unread divider: find first other-sender message after my last read
@@ -436,7 +435,8 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       });
 
       setLoading(false);
-      // Instagram-style: start at top (newest messages), no initial scroll needed
+      // Scroll to bottom after initial load
+      setTimeout(scrollToBottom, 50);
     };
 
     loadAll();
@@ -445,11 +445,11 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     const msgChannel = supabase.channel(`messages:${chatId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ new: m }) => {
-          // Add new messages at the beginning (top) since newest is first
-          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [mapRow(m), ...prev]);
+          // Add new messages at the end (bottom) since newest is last
+          setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m)]);
           if (m.sender_id !== currentUser.id) {
             playNotificationSound();
-            if (!isAtTopRef.current) setNewMsgCount(prev => prev + 1);
+            if (!isAtBottomRef.current) setNewMsgCount(prev => prev + 1);
           }
         })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
@@ -521,26 +521,20 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       typingTimeoutsRef.current.forEach(t => clearTimeout(t)); typingTimeoutsRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, currentUser.id]);
+  }, [chatId, currentUser.id, scrollToBottom]);
 
-  // Auto-scroll: Instagram-style - if at top (viewing newest), stay at top when new messages arrive
+  // Auto-scroll: always on own messages, only if at bottom for others' messages
   useEffect(() => {
-    if (messages.length === 0) return;
-    // New message added - if at top, scroll to new top (newest)
-    if (isAtTopRef.current) {
-      scrollToTop();
+    const last = messages[messages.length - 1];
+    if (!last) return;
+    if (last.senderId === currentUser.id || isAtBottomRef.current) {
+      scrollToBottom();
       setNewMsgCount(0);
-    } else {
-      // User is scrolled down, show new message count
-      const last = messages[messages.length - 1];
-      if (last?.senderId !== currentUser.id) {
-        setNewMsgCount(prev => prev + 1);
-      }
     }
   }, [messages]);
 
   const typingLabel = useMemo(() => formatTypingLabel(Array.from(typingUserIds).map(nameFor)), [typingUserIds, nameFor]);
-  useEffect(() => { if (isAtTopRef.current) scrollToTop(); }, [typingLabel]);
+  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(); }, [typingLabel]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -829,6 +823,18 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
           </div>
         ) : (
           <div className="flex flex-col space-y-1">
+            {/* Load more indicator */}
+            {loadingMore && (
+              <div className="flex justify-center py-3">
+                <div className="w-4 h-4 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
+              </div>
+            )}
+            {hasMore && !loadingMore && (
+              <button onClick={loadMore}
+                className="text-xs text-[var(--txt3)] hover:text-cyan-400 transition-colors py-2 text-center">
+                Load earlier messages
+              </button>
+            )}
             {displayMessages.map((msg, i) => {
               const isMe = msg.senderId === currentUser.id;
               const grouped = !msg.replyToId && displayMessages[i - 1]?.senderId === msg.senderId && !displayMessages[i-1]?.replyToId;
@@ -1059,21 +1065,21 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
                 </div>
               </motion.div>
             )}
-            {/* Anchor for scrolling to top (newest messages) */}
-            <div ref={startRef} />
+            {/* Anchor for scrolling to bottom (newest messages) */}
+            <div ref={endRef} />
           </div>
         )}
-        {/* ── #3 New messages jump button (Instagram-style: shows when new messages arrive while scrolled down) ── */}
+        {/* ── #3 New messages jump button ── */}
         <AnimatePresence>
-          {newMsgCount > 0 && !isAtTop && (
+          {newMsgCount > 0 && !isAtBottom && (
             <motion.button
               initial={{ opacity: 0, y: 8, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.95 }}
-              onClick={() => { scrollToTop(); setNewMsgCount(0); }}
-              className="absolute top-16 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-black text-xs font-semibold rounded-full shadow-lg shadow-cyan-900/40 transition-colors z-10 mx-auto w-fit"
+              onClick={() => { scrollToBottom(); setNewMsgCount(0); }}
+              className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-black text-xs font-semibold rounded-full shadow-lg shadow-cyan-900/40 transition-colors z-10 mx-auto w-fit"
             >
-              <ChevronDown className="w-3.5 h-3.5 rotate-180" />
+              <ChevronDown className="w-3.5 h-3.5" />
               {newMsgCount} new message{newMsgCount !== 1 ? 's' : ''}
             </motion.button>
           )}
