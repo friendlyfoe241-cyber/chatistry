@@ -254,7 +254,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const isAtTopRef = useRef(true);  // true when viewing newest messages (at bottom)
   const [isAtTop, setIsAtTop] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
-  const isInitialLoadRef = useRef(true);  // Track initial load for instant scroll
+  const hasInitializedRef = useRef(false);  // Track if initial scroll has happened
 
   // ── Group chat state ──
   const isGroup = conversation?.isGroup ?? false;
@@ -341,12 +341,6 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current; if (!el) return;
     
-    // Instant scroll to bottom on initial load - no animation
-    if (isInitialLoadRef.current) {
-      isInitialLoadRef.current = false;
-      el.scrollTop = el.scrollHeight;
-    }
-    
     // User is at top when scrollTop is near 0 (viewing oldest messages)
     const atTop = el.scrollTop < 120;
     isAtTopRef.current = atTop;
@@ -398,7 +392,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     setFirstUnreadId(null); setHasMore(false); setLoadingMore(false);
     hasMoreRef.current = false; loadingMoreRef.current = false; 
     oldestTimestampRef.current = null; newestTimestampRef.current = null;
-    isInitialLoadRef.current = true;
+    hasInitializedRef.current = false;
     setLiveName(conversation.name); setLiveAvatarUrl(conversation.avatarUrl);
     setLiveParticipantIds(conversation.participantIds); setLiveCreatedBy(conversation.createdBy);
     setShowGroupInfo(false);
@@ -555,10 +549,31 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, currentUser.id, scrollToBottom]);
 
-  // Auto-scroll: always on own messages, only if at bottom for others' messages
+  // Auto-scroll to bottom after messages are loaded (initial load only)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (hasInitializedRef.current) return;  // Only scroll on initial load
+    
+    hasInitializedRef.current = true;
+    
+    // Use requestAnimationFrame to ensure DOM is rendered
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = scrollContainerRef.current;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+          isAtTopRef.current = true;
+          setIsAtTop(true);
+        }
+      });
+    });
+  }, [messages.length]); // Only trigger when message count changes
+
+  // Auto-scroll on new messages (smooth scroll for own messages)
   useEffect(() => {
     const last = messages[messages.length - 1];
     if (!last) return;
+    // Only smooth scroll for own messages or when at bottom
     if (last.senderId === currentUser.id || isAtTopRef.current) {
       scrollToBottom();
       setNewMsgCount(0);
