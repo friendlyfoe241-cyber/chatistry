@@ -251,9 +251,10 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
 
   // ── #3 New messages jump button ──
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isAtTopRef = useRef(true);  // true when viewing newest messages (at top)
+  const isAtTopRef = useRef(true);  // true when viewing newest messages (at bottom)
   const [isAtTop, setIsAtTop] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
+  const isInitialLoadRef = useRef(true);  // Track initial load for instant scroll
 
   // ── Group chat state ──
   const isGroup = conversation?.isGroup ?? false;
@@ -339,6 +340,13 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current; if (!el) return;
+    
+    // Instant scroll to bottom on initial load - no animation
+    if (isInitialLoadRef.current) {
+      isInitialLoadRef.current = false;
+      el.scrollTop = el.scrollHeight;
+    }
+    
     // User is at top when scrollTop is near 0 (viewing oldest messages)
     const atTop = el.scrollTop < 120;
     isAtTopRef.current = atTop;
@@ -359,14 +367,6 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-
-  // Instant scroll to bottom without animation (for initial load)
-  const scrollToBottomInstant = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight - el.clientHeight;
-    }
-  }, []);
 
   // Smooth scroll to bottom (for new messages)
   const scrollToBottom = useCallback(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
@@ -398,6 +398,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     setFirstUnreadId(null); setHasMore(false); setLoadingMore(false);
     hasMoreRef.current = false; loadingMoreRef.current = false; 
     oldestTimestampRef.current = null; newestTimestampRef.current = null;
+    isInitialLoadRef.current = true;
     setLiveName(conversation.name); setLiveAvatarUrl(conversation.avatarUrl);
     setLiveParticipantIds(conversation.participantIds); setLiveCreatedBy(conversation.createdBy);
     setShowGroupInfo(false);
@@ -467,8 +468,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       });
 
       setLoading(false);
-      // Instant scroll to bottom (no animation) to avoid rapid scroll effect
-      setTimeout(scrollToBottomInstant, 0);
+      // Scroll will happen in handleScroll on initial render
     };
 
     loadAll();
