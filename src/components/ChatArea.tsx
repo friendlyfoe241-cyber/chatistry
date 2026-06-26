@@ -360,7 +360,15 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // Scroll to bottom (newest messages)
+  // Instant scroll to bottom without animation (for initial load)
+  const scrollToBottomInstant = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight - el.clientHeight;
+    }
+  }, []);
+
+  // Smooth scroll to bottom (for new messages)
   const scrollToBottom = useCallback(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
   const scrollToMessage = (id: string) => {
     const el = messageRefs.current.get(id);
@@ -459,14 +467,8 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       });
 
       setLoading(false);
-      // Scroll to bottom after initial load completes
-      setTimeout(() => {
-        scrollToBottom();
-        // After scrolling, reset oldestTimestampRef to current oldest
-        if (messages.length > 0) {
-          oldestTimestampRef.current = messages[0].timestamp;
-        }
-      }, 100);
+      // Instant scroll to bottom (no animation) to avoid rapid scroll effect
+      setTimeout(scrollToBottomInstant, 0);
     };
 
     loadAll();
