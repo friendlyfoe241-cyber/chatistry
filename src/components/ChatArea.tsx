@@ -550,7 +550,12 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   }, [chatId, currentUser.id, scrollToBottom]);
 
   // Auto-scroll to bottom after messages are loaded (initial load only)
-  useLayoutEffect(() => {
+  // Use isMounted to avoid SSR issues with useLayoutEffect
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => { setIsMounted(true); }, []);
+
+  useEffect(() => {
+    if (!isMounted) return;  // Skip on SSR
     if (messages.length === 0) return;
     if (hasInitializedRef.current) return;
     
@@ -565,7 +570,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
         setIsAtTop(true);
       }
     });
-  }, [messages.length]);
+  }, [messages.length, isMounted]);
 
   // Auto-scroll on new messages (smooth scroll for own messages)
   useEffect(() => {
