@@ -424,10 +424,15 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       });
 
       setLoading(false);
+      // Force scroll to bottom using direct DOM manipulation for reliability
+      const forceScrollToBottom = () => {
+        const el = scrollContainerRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      };
       // Primary scroll for initial messages
-      setTimeout(scrollToBottom, 50);
+      setTimeout(forceScrollToBottom, 50);
       // Secondary scroll to catch any delayed-loaded messages
-      setTimeout(scrollToBottom, 150);
+      setTimeout(forceScrollToBottom, 250);
     };
 
     loadAll();
