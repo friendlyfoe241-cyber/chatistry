@@ -663,6 +663,27 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     ? messages.filter(m => m.messageType === 'text' && m.content.toLowerCase().includes(searchQuery.toLowerCase()))
     : messages;
 
+  // Format date for day separators
+  const formatDateSeparator = (date: Date): string => {
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    
+    const options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric', year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined };
+    return date.toLocaleDateString(undefined, options);
+  };
+
+  // Check if we need a date separator before a message
+  const needsDateSeparator = (index: number): boolean => {
+    if (index === 0) return true;
+    const current = new Date(displayMessages[index].timestamp);
+    const previous = new Date(displayMessages[index - 1].timestamp);
+    return current.toDateString() !== previous.toDateString();
+  };
+
   const isPartnerOnline = !isGroup && partner ? onlineUserIds.includes(partner.id) : false;
   const onlineMembersCount = isGroup
     ? liveParticipantIds.filter(id => id !== currentUser.id && onlineUserIds.includes(id)).length
@@ -844,6 +865,17 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
                 <motion.div key={msg.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                   ref={el => { if (el) messageRefs.current.set(msg.id, el); else messageRefs.current.delete(msg.id); }}
                   className={cn('flex flex-col transition-all', grouped ? 'mt-0.5' : 'mt-5', isPinned ? 'bg-cyan-500/5 rounded-xl -mx-2 px-2' : '')}>
+
+                  {/* Day separator */}
+                  {needsDateSeparator(i) && (
+                    <div className="flex items-center gap-3 my-4">
+                      <div className="flex-1 h-px bg-[var(--border)]" />
+                      <span className="text-[11px] text-[var(--txt3)] font-medium px-2 whitespace-nowrap">
+                        {formatDateSeparator(new Date(msg.timestamp))}
+                      </span>
+                      <div className="flex-1 h-px bg-[var(--border)]" />
+                    </div>
+                  )}
 
                   {/* Unread divider */}
                   {firstUnreadId === msg.id && (
