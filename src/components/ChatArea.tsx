@@ -251,10 +251,9 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
 
   // ── #3 New messages jump button ──
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isAtTopRef = useRef(true);  // true when viewing newest messages (at bottom)
-  const [isAtTop, setIsAtTop] = useState(true);
+  const isAtBottomRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
-  const hasInitializedRef = useRef(false);  // Track if initial scroll has happened
 
   // ── Group chat state ──
   const isGroup = conversation?.isGroup ?? false;
@@ -299,70 +298,39 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     return u ? `@${u.username}` : 'someone';
   }, [memberMap, currentUser.id]);
 
-  const newestTimestampRef = useRef<string | null>(null);
-
   const loadMore = useCallback(async () => {
     if (!chatId || loadingMoreRef.current || !hasMoreRef.current) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
-    
-    const currentOldest = oldestTimestampRef.current;
-    if (!currentOldest) {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
-      return;
-    }
-
-    // Fetch older messages (before the oldest in current view, which is at the top)
     const { data } = await supabase.from('messages').select('*')
       .eq('conversation_id', chatId)
-      .lt('created_at', currentOldest)
-      .order('created_at', { ascending: true }).limit(PAGE_SIZE);
-    if (data && data.length > 0) {
-      // Prepend older messages at the top (before current oldest)
-      const older = data.map(mapRow);
+      .lt('created_at', oldestTimestampRef.current!)
+      .order('created_at', { ascending: false }).limit(PAGE_SIZE);
+    if (data) {
+      const older = data.reverse().map(mapRow);
       setMessages(prev => [...older, ...prev]);
       hasMoreRef.current = data.length === PAGE_SIZE;
       setHasMore(data.length === PAGE_SIZE);
-      // Update oldest timestamp to the new oldest
-      oldestTimestampRef.current = older[0].timestamp;
-    } else {
-      // No more messages
-      hasMoreRef.current = false;
-      setHasMore(false);
+      if (older.length > 0) oldestTimestampRef.current = older[0].timestamp;
     }
     loadingMoreRef.current = false;
     setLoadingMore(false);
   }, [chatId]);
 
-  // Debounced scroll handler to prevent multiple loadMore calls
-  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current; if (!el) return;
-    
-    // User is at top when scrollTop is near 0 (viewing oldest messages)
-    const atTop = el.scrollTop < 120;
-    isAtTopRef.current = atTop;
-    setIsAtTop(atTop);
-    if (atTop) setNewMsgCount(0);
-    
-    // Debounced load more - only trigger once per scroll event
-    if (el.scrollTop < 80) {
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = setTimeout(() => {
-        loadMore();
-      }, 100);
-    }
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+    if (atBottom) setNewMsgCount(0);
+    if (el.scrollTop < 80) loadMore();
   }, [loadMore]);
 
-  const startRef = useRef<HTMLDivElement>(null);  // Reference to top (oldest messages)
-  const endRef = useRef<HTMLDivElement>(null);   // Reference to bottom (newest messages)
+  const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // Smooth scroll to bottom (for new messages)
   const scrollToBottom = useCallback(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
   const scrollToMessage = (id: string) => {
     const el = messageRefs.current.get(id);
@@ -388,29 +356,23 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     setEditingId(null); setReplyingTo(null); setExpandedOriginals(new Set());
     setOtherReads(new Map()); setPartnerLastSeen(null); setPinnedMessage(null);
     setIsSearchOpen(false); setSearchQuery(''); setShowVoiceRecorder(false);
-    setNewMsgCount(0); isAtTopRef.current = true; setIsAtTop(true);
+    setNewMsgCount(0); isAtBottomRef.current = true; setIsAtBottom(true);
     setFirstUnreadId(null); setHasMore(false); setLoadingMore(false);
-    hasMoreRef.current = false; loadingMoreRef.current = false; 
-    oldestTimestampRef.current = null; newestTimestampRef.current = null;
-    hasInitializedRef.current = false;
+    hasMoreRef.current = false; loadingMoreRef.current = false; oldestTimestampRef.current = null;
     setLiveName(conversation.name); setLiveAvatarUrl(conversation.avatarUrl);
     setLiveParticipantIds(conversation.participantIds); setLiveCreatedBy(conversation.createdBy);
     setShowGroupInfo(false);
 
     const loadAll = async () => {
-      // Messages — load newest PAGE_SIZE, oldest at top, newest at bottom (traditional)
+      // Messages — load newest PAGE_SIZE, descending then reverse
       const { data } = await supabase.from('messages').select('*')
         .eq('conversation_id', chatId).order('created_at', { ascending: false }).limit(PAGE_SIZE);
       if (data) {
-        // Reverse to get ascending order (oldest first at top, newest at bottom)
         const msgs = data.reverse().map(mapRow);
         setMessages(msgs);
         hasMoreRef.current = data.length === PAGE_SIZE;
         setHasMore(data.length === PAGE_SIZE);
-        if (msgs.length > 0) {
-          newestTimestampRef.current = msgs[msgs.length - 1].timestamp;  // newest (at bottom)
-          oldestTimestampRef.current = msgs[0].timestamp;  // oldest (at top)
-        }
+        if (msgs.length > 0) oldestTimestampRef.current = msgs[0].timestamp;
 
         // Unread divider: find first other-sender message after my last read
         const { data: myRead } = await supabase.from('conversation_reads')
@@ -462,7 +424,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       });
 
       setLoading(false);
-      // Scroll will happen in handleScroll on initial render
+      setTimeout(scrollToBottom, 50);
     };
 
     loadAll();
@@ -471,11 +433,10 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     const msgChannel = supabase.channel(`messages:${chatId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
         ({ new: m }) => {
-          // Add new messages at the end (bottom) since newest is last in ascending order
           setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, mapRow(m)]);
           if (m.sender_id !== currentUser.id) {
             playNotificationSound();
-            if (!isAtTopRef.current) setNewMsgCount(prev => prev + 1);
+            if (!isAtBottomRef.current) setNewMsgCount(prev => prev + 1);
           }
         })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${chatId}` },
@@ -549,42 +510,18 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, currentUser.id, scrollToBottom]);
 
-  // Auto-scroll to bottom after messages are loaded (initial load only)
-  // Use isMounted to avoid SSR issues with useLayoutEffect
-  const [isMounted, setIsMounted] = useState(false);
-  useEffect(() => { setIsMounted(true); }, []);
-
-  useEffect(() => {
-    if (!isMounted) return;  // Skip on SSR
-    if (messages.length === 0) return;
-    if (hasInitializedRef.current) return;
-    
-    hasInitializedRef.current = true;
-    
-    // Use requestAnimationFrame to ensure DOM is painted
-    requestAnimationFrame(() => {
-      const el = scrollContainerRef.current;
-      if (el) {
-        el.scrollTop = el.scrollHeight;
-        isAtTopRef.current = true;
-        setIsAtTop(true);
-      }
-    });
-  }, [messages.length, isMounted]);
-
-  // Auto-scroll on new messages (smooth scroll for own messages)
+  // Auto-scroll: always on own messages, only if at bottom for others' messages
   useEffect(() => {
     const last = messages[messages.length - 1];
     if (!last) return;
-    // Only smooth scroll for own messages or when at bottom
-    if (last.senderId === currentUser.id || isAtTopRef.current) {
+    if (last.senderId === currentUser.id || isAtBottomRef.current) {
       scrollToBottom();
       setNewMsgCount(0);
     }
   }, [messages]);
 
   const typingLabel = useMemo(() => formatTypingLabel(Array.from(typingUserIds).map(nameFor)), [typingUserIds, nameFor]);
-  useEffect(() => { if (isAtTopRef.current) scrollToBottom(); }, [typingLabel]);
+  useEffect(() => { if (isAtBottomRef.current) scrollToBottom(); }, [typingLabel]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -873,6 +810,18 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
           </div>
         ) : (
           <div className="flex flex-col space-y-1">
+            {/* Load more indicator */}
+            {loadingMore && (
+              <div className="flex justify-center py-3">
+                <div className="w-4 h-4 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
+              </div>
+            )}
+            {hasMore && !loadingMore && (
+              <button onClick={loadMore}
+                className="text-xs text-[var(--txt3)] hover:text-cyan-400 transition-colors py-2 text-center">
+                Load earlier messages
+              </button>
+            )}
             {displayMessages.map((msg, i) => {
               const isMe = msg.senderId === currentUser.id;
               const grouped = !msg.replyToId && displayMessages[i - 1]?.senderId === msg.senderId && !displayMessages[i-1]?.replyToId;
@@ -1103,13 +1052,11 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
                 </div>
               </motion.div>
             )}
-            {/* Anchor for scrolling to bottom (newest messages) */}
-            <div ref={endRef} />
           </div>
         )}
         {/* ── #3 New messages jump button ── */}
         <AnimatePresence>
-          {newMsgCount > 0 && !isAtTop && (
+          {newMsgCount > 0 && !isAtBottom && (
             <motion.button
               initial={{ opacity: 0, y: 8, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1122,8 +1069,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
             </motion.button>
           )}
         </AnimatePresence>
-        {/* Anchor for auto-load when scrolling to top (oldest messages) */}
-        <div ref={startRef} style={{ height: 1 }} />
+        <div ref={endRef} />
       </div>
 
       {/* Reply bar */}
