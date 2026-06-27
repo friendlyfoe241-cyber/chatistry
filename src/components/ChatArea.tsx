@@ -550,24 +550,22 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   }, [chatId, currentUser.id, scrollToBottom]);
 
   // Auto-scroll to bottom after messages are loaded (initial load only)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (messages.length === 0) return;
-    if (hasInitializedRef.current) return;  // Only scroll on initial load
+    if (hasInitializedRef.current) return;
     
     hasInitializedRef.current = true;
     
-    // Use requestAnimationFrame to ensure DOM is rendered
+    // Use requestAnimationFrame to ensure DOM is painted
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el = scrollContainerRef.current;
-        if (el) {
-          el.scrollTop = el.scrollHeight;
-          isAtTopRef.current = true;
-          setIsAtTop(true);
-        }
-      });
+      const el = scrollContainerRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+        isAtTopRef.current = true;
+        setIsAtTop(true);
+      }
     });
-  }, [messages.length]); // Only trigger when message count changes
+  }, [messages.length]);
 
   // Auto-scroll on new messages (smooth scroll for own messages)
   useEffect(() => {
