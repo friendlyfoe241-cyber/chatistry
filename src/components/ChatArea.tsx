@@ -424,7 +424,10 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       });
 
       setLoading(false);
+      // Primary scroll for initial messages
       setTimeout(scrollToBottom, 50);
+      // Secondary scroll to catch any delayed-loaded messages
+      setTimeout(scrollToBottom, 150);
     };
 
     loadAll();
