@@ -15,7 +15,7 @@ import { LinkPreview } from './LinkPreview';
 import { ForwardModal } from './ForwardModal';
 import { GroupInfoModal } from './GroupInfoModal';
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 200;
 
 interface ChatAreaProps {
   currentUser: User;
