@@ -77,7 +77,7 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
--- Auto-delete messages beyond 100 per conversation
+-- Auto-delete messages beyond 200 per conversation
 CREATE OR REPLACE FUNCTION prune_old_messages()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
@@ -87,7 +87,7 @@ BEGIN
       SELECT id FROM public.messages
       WHERE conversation_id = NEW.conversation_id
       ORDER BY created_at DESC
-      LIMIT 100
+      LIMIT 200
     );
   RETURN NEW;
 END;
