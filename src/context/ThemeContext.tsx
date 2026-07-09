@@ -7,11 +7,11 @@ const ThemeContext = createContext<ThemeContextType>({ theme: 'dark', toggleThem
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() =>
-    (typeof window !== 'undefined' ? (localStorage.getItem('chatice-theme') as Theme) : null) ?? 'dark'
+    (typeof window !== 'undefined' ? (localStorage.getItem('chatistry-theme') as Theme) : null) ?? 'dark'
   );
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('chatice-theme', theme);
+    localStorage.setItem('chatistry-theme', theme);
   }, [theme]);
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
   return <ThemeContext.Provider value={{ theme, toggleTheme }}>{children}</ThemeContext.Provider>;

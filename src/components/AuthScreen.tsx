@@ -121,9 +121,9 @@ export function AuthScreen({ initialMode = 'signin', onBack }: { initialMode?: '
           <div className="relative mb-4">
             <div className="absolute inset-0 rounded-2xl bg-cyan-500/15 blur-2xl scale-150" />
             <div className="absolute inset-0 rounded-2xl bg-orange-500/10 blur-xl scale-125" />
-            <img src="/logo.png" alt="Chatice" className="relative w-20 h-20 object-contain drop-shadow-2xl" />
+            <img src="/logo.png" alt="CHATistry" className="relative w-20 h-20 object-contain drop-shadow-2xl" />
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight text-cyan-400 mb-1">CHATice</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-cyan-400 mb-1">CHATistry</h1>
           <p className="text-[13px] text-[var(--txt3)]">
             {isLogin ? 'Welcome back.' : 'Create your account.'}
           </p>

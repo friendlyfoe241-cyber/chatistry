@@ -24,8 +24,8 @@ export function LandingPage({ onSignIn, onSignUp }: LandingPageProps) {
       <nav className="fixed top-0 inset-x-0 z-50 border-b border-[var(--border)] bg-[var(--bg)]/80 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="CHATice" className="w-8 h-8 object-contain" />
-            <span className="text-lg font-bold tracking-tight text-cyan-400">CHATice</span>
+            <img src="/logo.png" alt="CHATistry" className="w-8 h-8 object-contain" />
+            <span className="text-lg font-bold tracking-tight text-cyan-400">CHATistry</span>
           </div>
           <div className="flex items-center gap-3">
             <button onClick={onSignIn}
@@ -59,7 +59,7 @@ export function LandingPage({ onSignIn, onSignUp }: LandingPageProps) {
             <div className="relative">
               <div className="absolute inset-0 rounded-3xl bg-cyan-500/20 blur-2xl scale-150" />
               <div className="absolute inset-0 rounded-3xl bg-orange-500/10 blur-xl scale-125" />
-              <img src="/logo.png" alt="CHATice" className="relative w-24 h-24 object-contain drop-shadow-2xl" />
+              <img src="/logo.png" alt="CHATistry" className="relative w-24 h-24 object-contain drop-shadow-2xl" />
             </div>
           </div>
 
@@ -136,7 +136,7 @@ export function LandingPage({ onSignIn, onSignUp }: LandingPageProps) {
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <img src="/logo.png" alt="" className="w-5 h-5 object-contain opacity-60" />
-            <span className="text-sm text-[var(--txt3)]">CHATice — free open messaging</span>
+            <span className="text-sm text-[var(--txt3)]">CHATistry — free open messaging</span>
           </div>
           <span className="text-xs text-[var(--txt3)]">Built with React + Supabase</span>
         </div>

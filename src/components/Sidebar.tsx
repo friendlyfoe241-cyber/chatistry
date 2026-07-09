@@ -196,8 +196,8 @@ export function Sidebar({
       {/* Header */}
       <div className="p-5 border-b border-[var(--border)] flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="Chatice logo" className="w-8 h-8 object-contain" />
-          <h1 className="text-xl font-bold tracking-tighter text-cyan-500">CHATice</h1>
+          <img src="/logo.png" alt="CHATistry logo" className="w-8 h-8 object-contain" />
+          <h1 className="text-xl font-bold tracking-tighter text-cyan-500">CHATistry</h1>
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => setShowNewGroup(true)}
