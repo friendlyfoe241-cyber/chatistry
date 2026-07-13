@@ -1,4 +1,4 @@
-# Chatice
+# CHATistry
 
 A minimal, real-time chat platform. No email required — just a username and password.
 
