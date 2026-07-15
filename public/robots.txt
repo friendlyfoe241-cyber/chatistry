@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://chatice-message.vercel.app/sitemap.xml
+Sitemap: https://chatistry.vercel.app/sitemap.xml
