@@ -5,21 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
     <title>CHATistry — Secure Real-Time Messaging</title>
-    <meta name="description" content="CHATistry is a secure, real-time messaging app. Send messages, share media, and stay connected." />
+    <meta name="description" content="CHATistry is a free, secure real-time messaging app with voice messages, reactions, media sharing, and end-to-end row-level security. No ads, no tracking." />
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://chatistry.vercel.app/" />
 
     <!-- Open Graph -->
     <meta property="og:type"        content="website" />
     <meta property="og:title"       content="CHATistry — Secure Real-Time Messaging" />
-    <meta property="og:description" content="Send messages, share media, and stay connected in real time." />
-    <meta property="og:image"       content="/logo.png" />
+    <meta property="og:description" content="Real-time chat with voice messages, reactions, media sharing, and end-to-end security. Free, open, yours." />
+    <meta property="og:image"       content="https://chatistry.vercel.app/logo.png" />
     <meta property="og:url"         content="https://chatistry.vercel.app" />
     <meta property="og:site_name"   content="CHATistry" />
 
     <!-- Twitter / X -->
     <meta name="twitter:card"        content="summary" />
     <meta name="twitter:title"       content="CHATistry — Secure Real-Time Messaging" />
-    <meta name="twitter:description" content="Send messages, share media, and stay connected in real time." />
-    <meta name="twitter:image"       content="/logo.png" />
+    <meta name="twitter:description" content="Real-time chat with voice messages, reactions, media sharing, and end-to-end security. Free, open, yours." />
+    <meta name="twitter:image"       content="https://chatistry.vercel.app/logo.png" />
 
     <!-- Favicons -->
     <link rel="icon"             type="image/x-icon" href="/favicon.ico" />
@@ -29,9 +32,67 @@
     <link rel="manifest"         href="/site.webmanifest" />
 
     <meta name="theme-color" content="#05050a" />
+
+    <!-- Structured data: tells Google / AI Overview what this site is -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "CHATistry",
+      "alternateName": "CHATistry Messaging",
+      "url": "https://chatistry.vercel.app",
+      "image": "https://chatistry.vercel.app/logo.png",
+      "applicationCategory": "CommunicationApplication",
+      "operatingSystem": "Web",
+      "description": "CHATistry is a free, secure real-time messaging app. Send text, voice messages and media, react with emoji, and chat with end-to-end row-level security. No ads, no tracking.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": [
+        "Real-time messaging with typing indicators and presence",
+        "End-to-end row-level security",
+        "Rich media sharing with automatic compression",
+        "Voice messages",
+        "Emoji reactions",
+        "Threads and replies"
+      ]
+    }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!--
+        SEO / no-JS fallback content.
+        This mirrors the real LandingPage.tsx copy exactly and is only
+        ever seen by crawlers that don't execute JavaScript (or for a
+        split second before React hydrates). React's createRoot().render()
+        replaces this div's children on mount, so real users never see it
+        as a separate flash of duplicate content.
+      -->
+      <main>
+        <h1>Messaging that feels instant.</h1>
+        <p>
+          CHATistry is a real-time chat app with voice messages, reactions,
+          media sharing, and end-to-end security. Free, open, yours.
+        </p>
+
+        <h2>Everything you need</h2>
+        <p>Built for real conversations, not demo screenshots.</p>
+        <ul>
+          <li><strong>Real-time</strong> — Messages delivered instantly with live typing indicators and presence.</li>
+          <li><strong>Secure</strong> — End-to-end row-level security. Your conversations stay private.</li>
+          <li><strong>Rich media</strong> — Send images and videos with automatic compression built in.</li>
+          <li><strong>Voice messages</strong> — Record and send voice messages with a single tap.</li>
+          <li><strong>Reactions</strong> — React to any message with emoji. See who reacted on hover.</li>
+          <li><strong>Threads &amp; replies</strong> — Reply inline, pin important messages, and never lose context.</li>
+        </ul>
+
+        <h2>Ready to chat?</h2>
+        <p>Free forever. No ads. No tracking.</p>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

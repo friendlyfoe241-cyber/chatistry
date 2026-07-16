@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output — Vercel builds this itself, never commit it
+dist/
+dist-ssr/
+
+# env
+.env
+.env.local
+.env.*.local
+env.local
+
+# editor / OS
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# vite
+*.local
