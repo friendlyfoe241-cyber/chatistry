@@ -26,20 +26,26 @@ const SB_KEY = Deno.env.get('SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_K
 function buildPrompt(
   messages: { sender: string; me: boolean; content: string }[],
   query: string,
+  callerName: string,
 ): string {
+  // Label every speaker by name (never "You") so distinct people stay distinct.
   const transcript = messages.length
-    ? messages.map((m) => `${m.me ? 'You' : m.sender}: ${m.content}`).join('\n')
+    ? messages.map((m) => `${m.sender}: ${m.content}`).join('\n')
     : '(no prior messages yet)';
   return [
-    'You are Wingman, a helpful in-chat assistant in the Chatistry messaging app. ' +
-      'A user asks you a question in the context of their recent conversation. ' +
-      'Be concise, helpful, and use context when relevant. Answer in plain text.',
+    'You are Wingman, a helpful in-chat assistant in the Chatistry messaging app.',
+    'The person asking you right now is: ' + callerName,
+    'The transcript below is ONLY the last ~20 messages of THIS one conversation.',
+    'Messages from other people are different users, NOT the same person as the asker, and are listed by their names.',
+    'Wingman answers are NOT part of the transcript — each request is fresh and sees only the chat history, never prior Wingman exchanges.',
+    'Use the conversation as context, but answer the current asker (' + callerName + ') directly doing only what they asked.',
+    'Be concise, helpful, and use context when relevant. Answer in plain text.',
     '',
-    '## Recent conversation',
+    '## Recent conversation transcript',
     transcript,
     '',
-    "## User's request to Wingman",
-    query,
+    "## The current asker's request in Wingman",
+    '[' + callerName + ']: ' + query,
   ].join('\n');
 }
 
@@ -152,6 +158,7 @@ Deno.serve(async (req) => {
     }
   }
 
+  const callerName = names[me.id] ?? 'Unknown';
   const context = rows.map((r) => ({
     sender: names[r.sender_id] ?? 'Unknown',
     me: r.sender_id === me.id,
@@ -164,7 +171,7 @@ Deno.serve(async (req) => {
             ? '🎥 [video]'
             : r.content ?? '',
   }));
-  const prompt = buildPrompt(context, query);
+  const prompt = buildPrompt(context, query, callerName);
 
   // ---- Rotate keys on "credits finished" errors.
   const seen = new Set<string>();
