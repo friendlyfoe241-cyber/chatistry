@@ -74,7 +74,7 @@ export function WingmanPanel({ conversationId, onClose }: WingmanPanelProps) {
   };
 
   return (
-    <div className="wingman-panel absolute top-16 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl overflow-hidden flex flex-col"
+    <div className="wingman-panel absolute top-16 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_90%,var(--bg-deep))] backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col"
       style={{ maxHeight: '60vh' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-gradient-to-r from-violet-600/15 via-purple-600/10 to-fuchsia-600/10">
