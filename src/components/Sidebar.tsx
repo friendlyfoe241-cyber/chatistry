@@ -204,7 +204,7 @@ export function Sidebar({
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => setShowNewGroup(true)}
-            className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
+            className="p-2 text-[var(--txt3)] transition-colors rounded-xl liquid-icon hover:text-[var(--accent)] hover:border-[var(--accent)]/35"
             title="New group">
             <Users className="w-4 h-4" />
           </button>
@@ -215,7 +215,7 @@ export function Sidebar({
             {showAppearance && <AppearanceMenu variant="dialog" onClose={() => setShowAppearance(false)} />}
           </div>
           <button onClick={onLogout}
-            className="p-2 text-[var(--txt3)] hover:text-[var(--txt)] transition-colors rounded-lg hover:bg-[var(--surface3)]"
+            className="p-2 text-[var(--txt3)] transition-colors rounded-xl liquid-icon hover:text-[var(--accent)] hover:border-[var(--accent)]/35"
             title="Sign out">
             <LogOut className="w-4 h-4" />
           </button>
@@ -245,7 +245,7 @@ export function Sidebar({
       {/* Chat list */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-3 space-y-1">
-          <h3 className="text-[10px] font-bold text-[var(--txt3)] uppercase tracking-[.16em] mb-3 px-2 mt-1">
+          <h3 className={cn('text-[10px] font-bold uppercase tracking-[.16em] mb-3 px-2 mt-1', theme === 'light' ? 'text-[var(--txt2)]' : 'text-[var(--txt3)]')}>
             {searchQuery.trim() ? 'Your Chats' : 'Recent Chats'}
           </h3>
           {displayList.length === 0 ? (
