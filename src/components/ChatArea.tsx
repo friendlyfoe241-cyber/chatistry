@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from 'react';
 import { User, Message, ReactionsMap, PinnedMessage, ConversationSummary, UserRow } from '../types';
 import {
   Send, MessageSquareDashed, Paperclip, X,
@@ -16,6 +16,7 @@ import { ForwardModal } from './ForwardModal';
 import { GroupInfoModal } from './GroupInfoModal';
 import { WingmanPanel } from './WingmanPanel';
 import { CHAT_THEMES, ChatThemeId, ChatThemePicker } from './ChatThemePicker';
+import { useTheme } from '../context/ThemeContext';
 
 const PAGE_SIZE = 200;
 
@@ -297,9 +298,21 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const [typingUserIds, setTypingUserIds] = useState<Set<string>>(new Set());
   const typingTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
+  const { theme: globalTheme } = useTheme();
   const partner = conversation?.partner;
   const chatId = conversation?.id ?? null;
   const currentChatTheme = CHAT_THEMES.find(theme => theme.id === chatThemeId) ?? CHAT_THEMES[0];
+  // In light mode, keep the theme's wallpaper but use light bubble colors
+  // (accent-tinted for your bubbles, translucent white for theirs) so messages
+  // don't stay dark black in the theme tones; the base light vars already give dark text.
+  const chatStyle = globalTheme === 'light'
+    ? { ...currentChatTheme.variables,
+        '--bubble-me-bg': 'color-mix(in srgb, var(--accent) 18%, white)',
+        '--bubble-me-border': 'color-mix(in srgb, var(--accent) 38%, transparent)',
+        '--bubble-them-bg': 'rgba(255,255,255,.66)',
+        '--bubble-them-border': 'rgba(76,96,121,.14)',
+      } as CSSProperties
+    : currentChatTheme.variables;
 
   useEffect(() => {
     if (!chatId) return;
@@ -831,7 +844,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const firstTyper = firstTyperId ? memberMap.get(firstTyperId) : undefined;
 
   return (
-    <div className="chat-pane glass-panel relative flex-1 flex flex-col bg-[var(--surface2)] max-h-full m-0 rounded-[32px] overflow-hidden text-[var(--txt)] min-w-0 overflow-x-hidden" style={currentChatTheme.variables}>
+    <div className="chat-pane glass-panel relative flex-1 flex flex-col bg-[var(--surface2)] max-h-full m-0 rounded-[32px] overflow-hidden text-[var(--txt)] min-w-0 overflow-x-hidden" style={chatStyle}>
 
       {/* Header */}
       <div className="h-20 border-b border-[var(--border)] bg-[var(--surface)] px-7 flex items-center gap-4 shrink-0 backdrop-blur-xl">
