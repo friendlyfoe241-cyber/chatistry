@@ -3,7 +3,7 @@ import { User, Message, ReactionsMap, PinnedMessage, ConversationSummary, UserRo
 import {
   Send, MessageSquareDashed, Paperclip, X,
   Pencil, Trash2, Check, CheckCheck, ChevronDown, Play, CornerUpLeft, Smile,
-  Search, SearchX, Mic, Pin, PinOff, ArrowLeft, Forward, Info, Plus, Sparkles,
+  Search, SearchX, Mic, Pin, PinOff, ArrowLeft, Forward, Info, Plus, Sparkles, Palette,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../utils';
@@ -15,6 +15,7 @@ import { LinkPreview } from './LinkPreview';
 import { ForwardModal } from './ForwardModal';
 import { GroupInfoModal } from './GroupInfoModal';
 import { WingmanPanel } from './WingmanPanel';
+import { CHAT_THEMES, ChatThemeId, ChatThemePicker } from './ChatThemePicker';
 
 const PAGE_SIZE = 200;
 
@@ -291,11 +292,45 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const [groupMembers, setGroupMembers] = useState<User[]>([]);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [showWingman, setShowWingman] = useState(false);
+  const [showChatThemes, setShowChatThemes] = useState(false);
+  const [chatThemeId, setChatThemeId] = useState<ChatThemeId>('aurora');
   const [typingUserIds, setTypingUserIds] = useState<Set<string>>(new Set());
   const typingTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const partner = conversation?.partner;
   const chatId = conversation?.id ?? null;
+  const currentChatTheme = CHAT_THEMES.find(theme => theme.id === chatThemeId) ?? CHAT_THEMES[0];
+
+  useEffect(() => {
+    if (!chatId) return;
+    const storageKey = `chatistry-chat-theme:${currentUser.id}:${chatId}`;
+    const localTheme = localStorage.getItem(storageKey) as ChatThemeId | null;
+    if (localTheme && CHAT_THEMES.some(theme => theme.id === localTheme)) setChatThemeId(localTheme);
+    else setChatThemeId('aurora');
+
+    let cancelled = false;
+    supabase.from('user_conversation_themes').select('theme_id')
+      .eq('user_id', currentUser.id).eq('conversation_id', chatId).maybeSingle()
+      .then(({ data }) => {
+        const savedTheme = data?.theme_id as ChatThemeId | undefined;
+        if (!cancelled && savedTheme && CHAT_THEMES.some(theme => theme.id === savedTheme)) {
+          setChatThemeId(savedTheme);
+          localStorage.setItem(storageKey, savedTheme);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [chatId, currentUser.id]);
+
+  const applyChatTheme = (themeId: ChatThemeId) => {
+    if (!chatId) return;
+    setChatThemeId(themeId);
+    localStorage.setItem(`chatistry-chat-theme:${currentUser.id}:${chatId}`, themeId);
+    supabase.from('user_conversation_themes').upsert({
+      user_id: currentUser.id, conversation_id: chatId, theme_id: themeId, updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,conversation_id' }).then(({ error }) => {
+      if (error) console.warn('Could not save chat theme:', error.message);
+    });
+  };
 
   // Fetch full member profiles whenever group membership changes
   useEffect(() => {
@@ -765,22 +800,27 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
 
   if (!conversation || !chatId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--txt3)]">
+      <div className="chat-pane glass-panel relative flex-1 flex flex-col items-center justify-center bg-[var(--surface2)] max-h-full m-0 rounded-[32px] overflow-hidden text-[var(--txt3)] min-w-0">
+        <div className="caustic-orb w-[29rem] h-[29rem] -right-40 -top-40 opacity-35 pointer-events-none" />
+        <div className="caustic-orb w-[22rem] h-[22rem] -left-32 -bottom-36 opacity-20 pointer-events-none" />
         {onBackToSidebar && (
           <button onClick={onBackToSidebar}
-            className="absolute top-5 left-5 flex items-center gap-2 text-sm text-[var(--txt2)] hover:text-[var(--txt)] transition-colors">
+            className="absolute top-5 left-5 z-10 flex items-center gap-2 text-sm text-[var(--txt2)] hover:text-[var(--txt)] transition-colors">
             <ArrowLeft className="w-4 h-4" /> Chats
           </button>
         )}
-        <MessageSquareDashed className="w-16 h-16 mb-4 opacity-30" />
-        <h2 className="text-xl font-medium text-[var(--txt)]">No chat selected</h2>
-        <p className="text-sm mt-2 text-center px-6">Search for a user, pick a recent chat, or start a group.</p>
-        {onBackToSidebar && (
-          <button onClick={onBackToSidebar}
-            className="mt-6 px-5 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-black text-sm font-medium transition-colors">
-            Open Chat List
-          </button>
-        )}
+        <div className="relative z-10 mx-6 max-w-sm text-center">
+          <div className="glass-panel-strong mx-auto grid w-20 h-20 place-items-center rounded-[28px] shadow-[0_18px_45px_rgba(0,0,0,.22)]">
+            <MessageSquareDashed className="w-9 h-9 text-[var(--accent)]" />
+          </div>
+          <p className="mt-7 text-[10px] font-bold uppercase tracking-[.2em] text-[var(--accent)]">Your space</p>
+          <h2 className="mt-3 text-2xl font-extrabold tracking-[-.045em] text-[var(--txt)]">Pick up a conversation.</h2>
+          <p className="mt-3 text-sm leading-6 text-[var(--txt2)]">Choose someone from your recent chats, search for a person, or make a new group when the conversation needs a room.</p>
+          <div className="mt-7 flex justify-center gap-2">
+            <span className="glass-panel rounded-full px-3 py-1.5 text-[11px] text-[var(--txt2)]">Private by default</span>
+            <span className="glass-panel rounded-full px-3 py-1.5 text-[11px] text-[var(--txt2)]">Made for people</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -791,10 +831,10 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
   const firstTyper = firstTyperId ? memberMap.get(firstTyperId) : undefined;
 
   return (
-    <div className="relative flex-1 flex flex-col bg-[var(--bg)] max-h-screen text-[var(--txt)] min-w-0 overflow-x-hidden">
+    <div className="chat-pane glass-panel relative flex-1 flex flex-col bg-[var(--surface2)] max-h-full m-0 rounded-[32px] overflow-hidden text-[var(--txt)] min-w-0 overflow-x-hidden" style={currentChatTheme.variables}>
 
       {/* Header */}
-      <div className="h-16 border-b border-[var(--border)] bg-[var(--surface)] px-4 flex items-center gap-3 shrink-0">
+      <div className="h-20 border-b border-[var(--border)] bg-[var(--surface)] px-7 flex items-center gap-4 shrink-0 backdrop-blur-xl">
         {/* Back button — mobile only */}
         {onBackToSidebar && (
           <button onClick={onBackToSidebar}
@@ -843,6 +883,11 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
             <Info className="w-4 h-4" />
           </button>
         )}
+        <button onClick={() => setShowChatThemes(true)}
+          className="w-9 h-9 rounded-xl border border-[var(--border)] bg-[var(--surface3)] flex items-center justify-center text-[var(--txt3)] hover:text-[var(--accent)] hover:border-[var(--border3)] transition-colors flex-shrink-0"
+          title="Choose chat theme">
+          <Palette className="w-4 h-4" />
+        </button>
         <button onClick={() => setShowWingman(o => !o)}
           className={cn('h-8 rounded-lg border px-2.5 flex items-center gap-1.5 transition-colors flex-shrink-0',
             showWingman ? 'border-violet-500/70 bg-violet-600/20 text-violet-300' : 'border-[var(--border)] text-[var(--txt3)] hover:border-violet-500/60 hover:text-violet-300')}
@@ -864,6 +909,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
           <WingmanPanel conversationId={chatId} onClose={() => setShowWingman(false)} />
         )}
       </AnimatePresence>
+      {showChatThemes && <ChatThemePicker activeThemeId={chatThemeId} onSelect={applyChatTheme} onClose={() => setShowChatThemes(false)} />}
 
       {/* Search bar */}
       <AnimatePresence>
@@ -908,7 +954,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       {/* Messages */}
       <div ref={scrollContainerRef} onScroll={handleScroll}
           onClick={() => { if (chatId) onMarkConversationRead?.(chatId); }}
-          className="flex-1 overflow-y-auto p-6 relative">
+          className="chat-scroll flex-1 overflow-y-auto p-6 md:p-9 relative">
         {loading ? (
           <div className="flex justify-center py-8">
             <div className="w-6 h-6 border-2 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
@@ -1001,7 +1047,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
                     </div>
 
                     {/* Bubble column */}
-                    <div className={cn('flex flex-col max-w-[55%]', isMe ? 'items-end' : 'items-start')}>
+                    <div className={cn('flex flex-col max-w-[52%]', isMe ? 'items-end' : 'items-start')}>
                       {/* Quoted bubble */}
                       {msg.replyToId && (
                         <div className={cn('px-3 py-2 rounded-xl text-xs mb-1 max-w-full border cursor-default select-none',
@@ -1027,8 +1073,8 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
                         <div className={cn(
                           'relative px-4 py-2.5 text-sm leading-relaxed break-words max-w-full',
                           isMe
-                            ? 'bg-[var(--bubble-me-bg)] border border-[var(--bubble-me-border)] text-[var(--bubble-me-text)] rounded-tl-2xl rounded-bl-2xl rounded-br-2xl'
-                            : 'bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] text-[var(--txt)] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl',
+                            ? 'bg-[var(--bubble-me-bg)] border border-[var(--bubble-me-border)] text-[var(--bubble-me-text)] rounded-tl-2xl rounded-bl-2xl rounded-br-2xl backdrop-blur-xl shadow-[inset_0_1px_rgba(255,255,255,.18),0_10px_24px_rgba(var(--accent-rgb),.08)]'
+                            : 'bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] text-[var(--txt)] rounded-tr-2xl rounded-br-2xl rounded-bl-2xl backdrop-blur-xl shadow-[inset_0_1px_rgba(255,255,255,.09),0_10px_24px_rgba(0,0,0,.08)]',
                           grouped && isMe && !msg.replyToId ? 'rounded-tr-md' : '',
                           grouped && !isMe && !msg.replyToId ? 'rounded-tl-md' : '',
                         )}>
@@ -1251,7 +1297,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
       </AnimatePresence>
 
       {/* Footer */}
-      <footer className="p-3 md:p-5 bg-[var(--surface)] border-t border-[var(--border)] shrink-0">
+      <footer className="p-4 md:p-5 bg-[var(--surface)] border-t border-[var(--border)] shrink-0 backdrop-blur-xl">
         <input ref={fileInputRef} type="file"
           accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/ogg,video/quicktime,video/x-msvideo"
           className="hidden" onChange={handleFileSelect} />
@@ -1284,7 +1330,7 @@ export function ChatArea({ currentUser, conversation, onlineUserIds, onBackToSid
             </button>
           ) : (
             <form onSubmit={handleSendText} className="flex-1 flex items-end gap-3">
-              <div className="flex-1 flex items-end bg-[var(--input-bg)] border border-[var(--border)] rounded-2xl px-4 py-2.5 focus-within:border-cyan-700 transition-colors">
+              <div className="composer-shell flex-1 flex items-end bg-[var(--input-bg)] border border-[var(--border)] rounded-[22px] px-5 py-3 focus-within:border-cyan-700 transition-colors">
                 <textarea ref={textareaRef} value={input} onChange={handleInputChange} onPaste={handlePaste}
                   onFocus={() => { if (chatId) onMarkConversationRead?.(chatId); }}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e as any); } }}
