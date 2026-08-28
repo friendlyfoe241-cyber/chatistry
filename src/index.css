@@ -20,7 +20,8 @@ html, body, #root { min-height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--txt); font-family: "Manrope", ui-sans-serif, system-ui, sans-serif; }
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1; background: radial-gradient(58rem 42rem at -12% -20%, rgba(var(--accent-rgb),.22), transparent 56%), radial-gradient(44rem 36rem at 108% -2%, rgba(128,154,255,.16), transparent 60%), radial-gradient(50rem 40rem at 62% 120%, rgba(109,118,232,.13), transparent 64%), linear-gradient(135deg,var(--bg),var(--bg-deep)); }
 button, input, textarea { font: inherit; }
-button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+input:focus-visible, textarea:focus-visible { outline: none; }
 ::selection { background: rgba(var(--accent-rgb),.30); color: var(--txt); }
 ::-webkit-scrollbar { width: 7px; height: 7px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border3); border-radius: 99px; }
 
