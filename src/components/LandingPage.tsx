@@ -16,7 +16,22 @@ const features = [
 export function LandingPage({ onSignIn, onSignUp }: LandingPageProps) {
   const [showAppearance, setShowAppearance] = useState(false);
   return <div className="liquid-shell min-h-screen overflow-hidden text-[var(--txt)]">
-    <nav className="fixed top-0 inset-x-0 z-50 px-4 pt-4"><div className="glass-panel max-w-6xl mx-auto h-16 rounded-2xl px-5 flex items-center justify-between"><div className="flex items-center gap-2.5"><img src="/logo.png" alt="Chatistry" className="w-9 h-9 object-contain" /><span className="text-lg font-extrabold tracking-[-.06em]">Chatistry</span></div><div className="flex items-center gap-2"><div className="relative"><button onClick={() => setShowAppearance(value => !value)} className="liquid-icon w-9 h-9 rounded-xl grid place-items-center text-[var(--accent)]" aria-label="Change appearance"><SlidersHorizontal className="w-4 h-4" /></button>{showAppearance && <AppearanceMenu />}</div><button onClick={onSignIn} className="px-3.5 py-2 text-sm font-semibold text-[var(--txt2)] hover:text-[var(--txt)] transition-colors">Sign in</button><button onClick={onSignUp} className="liquid-button px-4 py-2 rounded-xl text-sm font-bold">Join Chatistry</button></div></div></nav>
+    <nav className="fixed top-0 inset-x-0 z-50 px-4 pt-4">
+      <div className="glass-panel max-w-6xl mx-auto rounded-2xl px-4 py-3 sm:h-16 sm:px-5 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <img src="/logo.png" alt="Chatistry" className="w-9 h-9 object-contain" />
+          <span className="text-lg font-extrabold tracking-[-.06em]">Chatistry</span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
+          <div className="relative shrink-0">
+            <button onClick={() => setShowAppearance(value => !value)} className="liquid-icon w-9 h-9 rounded-xl grid place-items-center text-[var(--accent)]" aria-label="Change appearance"><SlidersHorizontal className="w-4 h-4" /></button>
+            {showAppearance && <AppearanceMenu />}
+          </div>
+          <button onClick={onSignIn} className="px-3 py-1.5 sm:px-3.5 sm:py-2 text-sm font-semibold text-[var(--txt2)] hover:text-[var(--txt)] transition-colors whitespace-nowrap">Sign in</button>
+          <button onClick={onSignUp} className="liquid-button px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-sm font-bold whitespace-nowrap">Join Chatistry</button>
+        </div>
+      </div>
+    </nav>
     <main>
       <section className="relative max-w-6xl mx-auto px-6 pt-40 pb-24 lg:pt-48 lg:pb-36 grid lg:grid-cols-[1.08fr_.92fr] gap-14 items-center"><div className="absolute w-[32rem] h-[32rem] -top-28 -right-24 caustic-orb opacity-30 pointer-events-none" />
         <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .7, ease: [0.22,1,.36,1] }} className="relative"><div className="inline-flex items-center gap-2 rounded-full glass-panel px-3.5 py-2 text-[11px] font-bold uppercase tracking-[.13em] text-[var(--txt2)]"><span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_12px_var(--accent)]" /> A more human messenger</div><h1 className="mt-7 max-w-2xl text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-[-.075em] leading-[.98]">A calm place for<br /><span className="text-[var(--accent)]">real conversation.</span></h1><p className="mt-6 max-w-lg text-base sm:text-lg leading-8 text-[var(--txt2)]">Chatistry makes space for the people and messages that matter, with the immediacy of a live chat and the polish of something personal.</p><div className="mt-9 flex flex-wrap gap-3"><button onClick={onSignUp} className="liquid-button rounded-2xl px-6 py-3.5 text-sm font-extrabold flex items-center gap-2">Create your space <ArrowRight className="w-4 h-4" /></button><button onClick={onSignIn} className="glass-panel rounded-2xl px-6 py-3.5 text-sm font-bold hover:bg-[var(--surface3)] transition-colors">I already have an account</button></div><p className="mt-5 text-xs text-[var(--txt3)]">No ads. No clutter. Just your conversations.</p></motion.div>
