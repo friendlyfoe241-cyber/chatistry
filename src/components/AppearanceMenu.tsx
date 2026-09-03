@@ -38,5 +38,5 @@ export function AppearanceMenu({ variant = 'popover', onClose }: AppearanceMenuP
     <div role="dialog" aria-modal="true" aria-label="Appearance settings" className="appearance-menu fixed z-[100] left-1/2 top-1/2 w-[min(23rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 p-4">{content}</div>
   </>, document.body);
 
-  return <div className="appearance-menu fixed inset-x-3 top-24 z-[70] w-auto p-3 sm:absolute sm:inset-x-auto sm:right-0 sm:top-[calc(100%+10px)] sm:w-72">{content}</div>;
+  return <div className="appearance-menu fixed inset-x-3 top-24 z-[70] w-auto p-3 sm:absolute sm:inset-x-auto sm:right-0 sm:top-[calc(100%+10px)] sm:w-72" style={{ background: 'color-mix(in srgb, var(--surface2) 93%, var(--bg-deep))', backdropFilter: 'blur(48px) saturate(150%)', WebkitBackdropFilter: 'blur(48px) saturate(150%)' }}>{content}</div>;
 }
