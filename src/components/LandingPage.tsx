@@ -16,7 +16,7 @@ const features = [
 export function LandingPage({ onSignIn, onSignUp }: LandingPageProps) {
   const [showAppearance, setShowAppearance] = useState(false);
   return <div className="liquid-shell min-h-screen overflow-hidden text-[var(--txt)]">
-    <nav className="fixed top-0 inset-x-0 z-50 px-4 pt-4">
+    <nav className="landing-nav fixed top-0 inset-x-0 z-50 px-4 pt-4">
       <div className="glass-panel max-w-6xl mx-auto rounded-2xl px-4 py-3 sm:h-16 sm:px-5 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
         <div className="flex items-center gap-2.5 shrink-0">
           <img src="/logo.png" alt="Chatistry" className="w-9 h-9 object-contain" />
