@@ -189,7 +189,11 @@ export function Sidebar({
     const { error } = await supabase.from('hidden_conversations').insert({
       user_id: currentUser.id, conversation_id: convId,
     });
-    if (error) console.warn('Failed to hide conversation:', error.message);
+    if (error) {
+      console.warn('Failed to hide conversation:', error.message);
+      alert(`Couldn't hide conversation — is the hidden_conversations table missing?\n\n${error.message}`);
+      return;
+    }
     setHiddenConvoIds(prev => new Set(prev.add(convId)));
   };
 

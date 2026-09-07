@@ -118,6 +118,9 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation }: H
         <div className="mt-5">
           <input
             type="password"
+            name="hidden-chat-passcode"
+            autoComplete="new-password"
+            data-lpignore="true"
             value={password}
             onChange={e => { setPassword(e.target.value); setError(false); }}
             onKeyDown={e => { if (e.key === 'Enter') open(); }}
