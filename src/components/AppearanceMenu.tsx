@@ -40,7 +40,7 @@ export function AppearanceMenu({ variant = 'popover', onClose, currentUser, onOp
     })}</div>
     {currentUser && onOpenConversation && (
       <>
-        <div className="mt-4 px-2 flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--txt2)]"><Lock className="w-3 h-3" /> Hidden chats</div>
+        <div className="blur mt-4 px-2 flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--txt2)]"><Lock className="w-3 h-3" /> Hidden chats</div>
         <button onClick={() => setShowHiddenChats(true)}
           className="mt-1 w-full flex items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-white/[0.05]">
           <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--surface4)] text-[var(--accent)]"><EyeOff className="w-3.5 h-3.5" /></span>
