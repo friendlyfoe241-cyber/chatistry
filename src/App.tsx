@@ -194,21 +194,78 @@ export default function App() {
     }
   }, [user?.id]);
 
-  // Single source of truth for auth — onAuthStateChange fires as INITIAL_SESSION
-  // on page load, so getSession is redundant and causes a double fetchProfile race.
+  // Boot the auth flow with a timeout around every await, plus a hard ceiling on
+  // the whole effect. Supabase's onAuthStateChange INITIAL_SESSION event can
+  // occasionally never fire (or the profile/unread queries hang), which used to
+  // leave the app stuck on the loading spinner forever. getSession() is therefore
+  // used to kick things off, with the callback as a backup, so some path always
+  // resolves within a bounded time and the watchdog (below) can reload if not.
   useEffect(() => {
+    // Reject a promise after `ms` unless it wins first; the timer is always
+    // cleared so a fast query never leaves a stray timeout hanging around.
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([p, timeout]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+    };
+
+    // Boot completed without needing a reload — clear the watchdog flag so the
+    // next visit can auto-reload again if it ever gets stuck.
+    const finishBoot = () => {
+      try { sessionStorage.removeItem('chatistry:boot-reload'); } catch { /* ignore */ }
+      setLoading(false);
+    };
+
+    const settle = async () => {
+      try {
+        const { data: { session } } = await withTimeout(supabase.auth.getSession(), 5000);
+        if (session?.user) {
+          const profile = await withTimeout(fetchProfile(session.user.id, session.user.user_metadata.username ?? ''), 4000).catch(err => {
+            console.warn('fetchProfile timed out/failed, using auth metadata only:', err);
+            return { id: session.user.id, username: session.user.user_metadata.username ?? '' };
+          });
+          setUser(profile);
+          await withTimeout(loadUnreadCounts(session.user.id), 4000).catch(err =>
+            console.warn('loadUnreadCounts timed out/failed:', err));
+        } else {
+          setUser(null);
+          setUnreadCounts({});
+        }
+      } catch (err) {
+        // getSession timed out or the network is down — the onAuthStateChange
+        // callback and the 4s bail are still our safety nets, so just stop
+        // loading rather than spin forever.
+        console.warn('Auth boot failed, falling back:', err);
+      }
+      finishBoot();
+    };
+    settle();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
-        const profile = await fetchProfile(session.user.id, session.user.user_metadata.username ?? '');
+        const profile = await withTimeout(fetchProfile(session.user.id, session.user.user_metadata.username ?? ''), 4000).catch(err => {
+          console.warn('fetchProfile timed out/failed, using auth metadata only:', err);
+          return { id: session.user.id, username: session.user.user_metadata.username ?? '' };
+        });
         setUser(profile);
-        await loadUnreadCounts(session.user.id);
+        await withTimeout(loadUnreadCounts(session.user.id), 4000).catch(err =>
+          console.warn('loadUnreadCounts timed out/failed:', err));
       } else {
         setUser(null);
         setUnreadCounts({});
       }
-      setLoading(false);
+      finishBoot();
     });
-    return () => subscription.unsubscribe();
+
+    // Hard ceiling: whatever happens, stop showing the boot spinner after 4s so
+    // the watchdog (in the loading view) can take over instead of spinning forever.
+    const bail = setTimeout(() => finishBoot(), 4000);
+
+    return () => { subscription.unsubscribe(); clearTimeout(bail); };
   }, []);
 
   useEffect(() => {
@@ -389,11 +446,17 @@ export default function App() {
     if (isMobile) setMobileSidebarOpen(true);
   };
 
-  if (loading) return (
-    <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
-      <div className="w-8 h-8 border-4 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
-    </div>
-  );
+  if (loading) {
+    // Watchdog: the auth boot above has timeouts/retries, but if the loading
+    // screen is somehow still stuck after ~1.5s, force a real page reload. A
+    // reload only resolves this class of bug (a dropped auth event or an
+    // unfulfilled network promise), and the flag prevents an infinite
+    // reload-loop if the problem is transient recurrence. A manual button is
+    // also offered in case the browser blocks the automatic reload.
+    return (
+      <BootWatchdog />
+    );
+  }
 
   if (!user) {
     if (authMode) return <AuthScreen initialMode={authMode} onBack={() => setAuthMode(null)} />;
@@ -438,5 +501,52 @@ export default function App() {
         />
       </div>
     </ErrorBoundary>
+  );
+}
+
+// ── Boot watchdog ──────────────────────────────────────────────────────────
+const LOADING_WATCHDOG_MS = 1500;
+const BOOT_RELOAD_FLAG = 'chatistry:boot-reload';
+
+// Shown while the app is booting. If the spinner is still up after
+// LOADING_WATCHDOG_MS, the page reloads automatically (same fix as a manual
+// refresh, but hands-free). The sessionStorage flag makes sure we only reload
+// once per visit — a reload that lands on the same stuck state means the
+// problem isn't boot-time and an infinite reload loop would be worse.
+function BootWatchdog() {
+  const [reloading, setReloading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        if (sessionStorage.getItem(BOOT_RELOAD_FLAG)) return; // already tried
+        sessionStorage.setItem(BOOT_RELOAD_FLAG, '1');
+      } catch { /* storage unavailable */ }
+      setReloading(true);
+      window.location.reload();
+    }, LOADING_WATCHDOG_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-8 h-8 border-4 border-[var(--border)] border-t-cyan-500 rounded-full animate-spin" />
+        {reloading && (
+          <>
+            <p className="text-sm text-[var(--txt2)]">Taking a while — reloading…</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 text-sm font-semibold rounded-full border border-[var(--border3)] bg-[var(--surface3)] text-[var(--txt)] hover:brightness-125 transition"
+            >
+              Reload now
+            </button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
