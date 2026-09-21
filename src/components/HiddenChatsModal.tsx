@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Eye, EyeOff, Loader2, X } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Loader2, MoreVertical, X } from 'lucide-react';
 import { ConversationRow, ConversationSummary, User, UserRow } from '../types';
 import { supabase } from '../supabase';
 import { cn } from '../utils';
@@ -15,14 +15,39 @@ interface HiddenChatsModalProps {
   currentUser: User;
   onClose: () => void;
   onOpenConversation: (conv: ConversationSummary) => void;
+  onUnhide?: (convId: string) => void;
 }
 
-export function HiddenChatsModal({ currentUser, onClose, onOpenConversation }: HiddenChatsModalProps) {
+export function HiddenChatsModal({ currentUser, onClose, onOpenConversation, onUnhide }: HiddenChatsModalProps) {
   const [stage, setStage] = useState<'password' | 'list'>('password');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [convos, setConvos] = useState<ConversationSummary[]>([]);
+  const [menuConvoId, setMenuConvoId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Clicking anywhere outside the kebab menu closes it.
+  useEffect(() => {
+    if (!menuConvoId) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuConvoId(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [menuConvoId]);
+
+  const unhide = async (convId: string) => {
+    setMenuConvoId(null);
+    const { error } = await supabase.from('hidden_conversations').delete().eq('user_id', currentUser.id).eq('conversation_id', convId);
+    if (error) {
+      console.warn('Failed to unhide conversation:', error.message);
+      alert(`Couldn't unhide conversation:\n\n${error.message}`);
+      return;
+    }
+    setConvos(prev => prev.filter(c => c.id !== convId));
+    onUnhide?.(convId);
+  };
 
   const open = async () => {
     if (password.trim() !== HIDDEN_CHATS_PASSWORD) {
@@ -145,16 +170,43 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation }: H
           ) : convos.length === 0 ? (
             <p className="p-6 text-center text-xs text-[var(--txt3)]">Nothing hidden yet — use the ⋮ menu on a chat to hide it.</p>
           ) : (
-            convos.map(c => (
-              <button key={c.id} onClick={() => { onOpenConversation(c); onClose(); }}
-                className="w-full flex items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-[var(--surface4)] transition-colors">
-                <Avatar user={{ id: c.id, username: c.name, avatarUrl: c.avatarUrl } as User} size="sm" />
-                <div className="flex-1 min-w-0">
-                  <h4 className="text-xs font-semibold text-[var(--txt)] truncate">{c.name}</h4>
-                  <div className="text-[10px] text-[var(--txt3)]">{c.subtitle ?? (c.isGroup ? 'Group chat' : '')}</div>
+            convos.map((c, i) => (
+              <div key={c.id} className="relative flex items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-[var(--surface4)]">
+                <button onClick={() => { onOpenConversation(c); onClose(); }} aria-label={`Open ${c.name}`}
+                  className="flex flex-1 min-w-0 items-center gap-3 text-left">
+                  <Avatar user={{ id: c.id, username: c.name, avatarUrl: c.avatarUrl } as User} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-xs font-semibold text-[var(--txt)] truncate">{c.name}</h4>
+                    <div className="text-[10px] text-[var(--txt3)]">{c.subtitle ?? (c.isGroup ? 'Group chat' : '')}</div>
+                  </div>
+                  <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-[var(--accent)]"><Eye className="h-3 w-3" /> Open</span>
+                </button>
+                <div ref={el => { if (menuConvoId === c.id) menuRef.current = el; }} className="relative shrink-0">
+                  <button
+                    onClick={() => setMenuConvoId(prev => prev === c.id ? null : c.id)}
+                    className={cn('w-6 h-6 rounded flex items-center justify-center transition-colors',
+                      menuConvoId === c.id ? 'text-[var(--txt)] bg-[var(--surface4)]' : 'text-[var(--txt3)] hover:text-[var(--txt)] hover:bg-[var(--surface4)]')}
+                    title="Options"
+                    aria-label="Options for hidden chat"
+                    aria-expanded={menuConvoId === c.id}
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </button>
+                  {menuConvoId === c.id && (
+                    <div
+                      className={cn('absolute right-0 z-30 w-44 rounded-xl border border-[var(--border2)] bg-[var(--surface2)] p-1 shadow-2xl',
+                        i >= convos.length - 2 ? 'bottom-full mb-1' : 'mt-1 top-full')}
+                      style={{ background: 'color-mix(in srgb, var(--surface2) 96%, var(--bg-deep))', backdropFilter: 'blur(28px) saturate(150%)' }}>
+                      <button
+                        onClick={() => unhide(c.id)}
+                        className="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--txt2)] hover:bg-[var(--surface4)] hover:text-[var(--txt)] transition-colors">
+                        <EyeOff className="w-3.5 h-3.5" />
+                        Unhide conversation
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] font-medium text-[var(--accent)]"><Eye className="h-3 w-3" /> Open</span>
-              </button>
+              </div>
             ))
           )}
         </div>

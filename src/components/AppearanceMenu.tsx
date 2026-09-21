@@ -19,9 +19,10 @@ interface AppearanceMenuProps {
   onClose?: () => void;
   currentUser?: User | null;
   onOpenConversation?: (conv: ConversationSummary) => void;
+  onUnhide?: (convId: string) => void;
 }
 
-export function AppearanceMenu({ variant = 'popover', onClose, currentUser, onOpenConversation }: AppearanceMenuProps) {
+export function AppearanceMenu({ variant = 'popover', onClose, currentUser, onOpenConversation, onUnhide }: AppearanceMenuProps) {
   const { theme, accent, setTheme, setAccent } = useTheme();
   const [showHiddenChats, setShowHiddenChats] = useState(false);
   const content = <>
@@ -51,7 +52,7 @@ export function AppearanceMenu({ variant = 'popover', onClose, currentUser, onOp
   </>;
 
   const hiddenModal = showHiddenChats && currentUser && onOpenConversation ? (
-    <HiddenChatsModal currentUser={currentUser} onClose={() => setShowHiddenChats(false)} onOpenConversation={onOpenConversation} />
+    <HiddenChatsModal currentUser={currentUser} onClose={() => setShowHiddenChats(false)} onOpenConversation={onOpenConversation} onUnhide={onUnhide} />
   ) : null;
 
   const dialog = createPortal(<>

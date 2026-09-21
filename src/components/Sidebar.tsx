@@ -263,6 +263,7 @@ export function Sidebar({
                 onClose={() => setShowAppearance(false)}
                 currentUser={currentUser}
                 onOpenConversation={conv => { setShowAppearance(false); onSelectConversation(conv); }}
+                onUnhide={convId => setHiddenConvoIds(prev => { const s = new Set(prev); s.delete(convId); return s; })}
               />
             )}
           </div>
