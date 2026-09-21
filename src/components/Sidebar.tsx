@@ -390,9 +390,9 @@ export function Sidebar({
                           <MoreVertical className="w-3.5 h-3.5" />
                         </button>
                         {kebabConvoId === c.id && (
-                          <div className={cn('absolute right-0 z-30 w-48 rounded-xl border border-[var(--border2)] bg-[var(--surface2)] p-1 shadow-2xl',
+                          <div className={cn('absolute right-0 z-30 w-48 rounded-xl border border-[var(--border2)] p-1 shadow-2xl',
                             i >= displayList.length - 2 ? 'bottom-full mb-1' : 'top-full mt-1')}
-                            style={{ background: 'color-mix(in srgb, var(--surface2) 96%, var(--bg-deep))', backdropFilter: 'blur(28px) saturate(150%)' }}>
+                            style={{ background: 'linear-gradient(145deg, var(--surface), var(--surface2))', backdropFilter: 'blur(28px) saturate(150%)', WebkitBackdropFilter: 'blur(28px) saturate(150%)' }}>
                             <button
                               onClick={e => togglePinConvo(e, c.id)}
                               className="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--txt2)] hover:bg-[var(--surface4)] hover:text-[var(--txt)] transition-colors"

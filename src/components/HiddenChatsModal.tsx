@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Eye, EyeOff, Loader2, MoreVertical, X } from 'lucide-react';
 import { ConversationRow, ConversationSummary, User, UserRow } from '../types';
@@ -10,6 +10,10 @@ import { Avatar } from './Avatar';
 // client-side: it's an accidental-discovery guard, not a security boundary.
 
 export const HIDDEN_CHATS_PASSWORD = '12345';
+
+// Kebab-menu geometry (matches the w-44 menu width below).
+const MENU_W = 176;
+const MENU_H = 48;
 
 interface HiddenChatsModalProps {
   currentUser: User;
@@ -25,20 +29,38 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation, onU
   const [loading, setLoading] = useState(false);
   const [convos, setConvos] = useState<ConversationSummary[]>([]);
   const [menuConvoId, setMenuConvoId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number; above: boolean } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Clicking anywhere outside the kebab menu closes it.
+  // Clicking anywhere outside the kebab menu closes it. The menu itself is
+  // portaled to <body> so it can never be clipped by the scrolling list.
   useEffect(() => {
     if (!menuConvoId) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuConvoId(null);
+      const target = e.target as HTMLElement;
+      if (menuRef.current?.contains(target)) return;
+      if (target.closest?.('[data-hidden-chat-menu-trigger]')) return;
+      setMenuConvoId(null);
+      setMenuPos(null);
     };
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [menuConvoId]);
 
+  const openMenu = (e: ReactMouseEvent, convId: string) => {
+    e.stopPropagation();
+    if (menuConvoId === convId) { setMenuConvoId(null); setMenuPos(null); return; }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    // Flip above only when there isn't room below in the viewport.
+    const above = window.innerHeight - rect.bottom < MENU_H + 8;
+    const x = Math.max(8, Math.min(rect.right - MENU_W, window.innerWidth - MENU_W - 8));
+    setMenuPos({ x, y: above ? rect.top : rect.bottom, above });
+    setMenuConvoId(convId);
+  };
+
   const unhide = async (convId: string) => {
     setMenuConvoId(null);
+    setMenuPos(null);
     const { error } = await supabase.from('hidden_conversations').delete().eq('user_id', currentUser.id).eq('conversation_id', convId);
     if (error) {
       console.warn('Failed to unhide conversation:', error.message);
@@ -115,7 +137,7 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation, onU
     } finally { setLoading(false); }
   };
 
-  return createPortal(<>
+  const mainPortal = createPortal(<>
     <button className="fixed inset-0 z-[90] cursor-default bg-black/35 backdrop-blur-sm" onClick={onClose} aria-label="Close hidden chats" />
     <section role="dialog" aria-modal="true" aria-label="Hidden chats" className="appearance-menu fixed z-[100] left-1/2 top-1/2 w-[min(22rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 p-5">
       <header className="flex items-center gap-2.5">
@@ -164,13 +186,13 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation, onU
           </button>
         </div>
       ) : (
-        <div className="mt-4 max-h-[45vh] overflow-y-auto space-y-1 pr-1">
+        <div className="mt-4 max-h-[calc(100vh-14rem)] overflow-y-auto space-y-1 pr-1">
           {loading ? (
             <div className="flex justify-center p-6"><Loader2 className="h-5 w-5 animate-spin text-[var(--txt3)]" /></div>
           ) : convos.length === 0 ? (
             <p className="p-6 text-center text-xs text-[var(--txt3)]">Nothing hidden yet — use the ⋮ menu on a chat to hide it.</p>
           ) : (
-            convos.map((c, i) => (
+            convos.map(c => (
               <div key={c.id} className="relative flex items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-[var(--surface4)]">
                 <button onClick={() => { onOpenConversation(c); onClose(); }} aria-label={`Open ${c.name}`}
                   className="flex flex-1 min-w-0 items-center gap-3 text-left">
@@ -181,31 +203,18 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation, onU
                   </div>
                   <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-[var(--accent)]"><Eye className="h-3 w-3" /> Open</span>
                 </button>
-                <div ref={el => { if (menuConvoId === c.id) menuRef.current = el; }} className="relative shrink-0">
-                  <button
-                    onClick={() => setMenuConvoId(prev => prev === c.id ? null : c.id)}
-                    className={cn('w-6 h-6 rounded flex items-center justify-center transition-colors',
-                      menuConvoId === c.id ? 'text-[var(--txt)] bg-[var(--surface4)]' : 'text-[var(--txt3)] hover:text-[var(--txt)] hover:bg-[var(--surface4)]')}
-                    title="Options"
-                    aria-label="Options for hidden chat"
-                    aria-expanded={menuConvoId === c.id}
-                  >
-                    <MoreVertical className="w-3.5 h-3.5" />
-                  </button>
-                  {menuConvoId === c.id && (
-                    <div
-                      className={cn('absolute right-0 z-30 w-44 rounded-xl border border-[var(--border2)] bg-[var(--surface2)] p-1 shadow-2xl',
-                        i >= convos.length - 2 ? 'bottom-full mb-1' : 'mt-1 top-full')}
-                      style={{ background: 'color-mix(in srgb, var(--surface2) 96%, var(--bg-deep))', backdropFilter: 'blur(28px) saturate(150%)' }}>
-                      <button
-                        onClick={() => unhide(c.id)}
-                        className="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--txt2)] hover:bg-[var(--surface4)] hover:text-[var(--txt)] transition-colors">
-                        <EyeOff className="w-3.5 h-3.5" />
-                        Unhide conversation
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <button
+                  data-hidden-chat-menu-trigger
+                  onPointerDown={e => e.stopPropagation()}
+                  onClick={e => openMenu(e, c.id)}
+                  className={cn('w-6 h-6 rounded flex items-center justify-center transition-colors shrink-0',
+                    menuConvoId === c.id ? 'text-[var(--txt)] bg-[var(--surface4)]' : 'text-[var(--txt3)] hover:text-[var(--txt)] hover:bg-[var(--surface4)]')}
+                  title="Options"
+                  aria-label="Options for hidden chat"
+                  aria-expanded={menuConvoId === c.id}
+                >
+                  <MoreVertical className="w-3.5 h-3.5" />
+                </button>
               </div>
             ))
           )}
@@ -213,4 +222,33 @@ export function HiddenChatsModal({ currentUser, onClose, onOpenConversation, onU
       )}
     </section>
   </>, document.body);
+
+  // Portaled menu drawn over the whole page, positioned at the trigger button,
+  // so it's never clipped by the modal's scrollable list.
+  const contextMenu = menuConvoId && menuPos ? createPortal(
+    <div
+      ref={menuRef}
+      data-hidden-chat-menu
+      className="fixed z-[120] w-44 rounded-xl border border-[var(--border2)] p-1 shadow-2xl"
+      style={{
+        left: menuPos.x,
+        top: menuPos.above ? menuPos.y - MENU_H : menuPos.y,
+        transform: menuPos.above ? 'translateY(-100%)' : 'translateY(4px)',
+        background: 'linear-gradient(145deg, var(--surface), var(--surface2))',
+        backdropFilter: 'blur(28px) saturate(150%)',
+        WebkitBackdropFilter: 'blur(28px) saturate(150%)',
+        boxShadow: 'var(--shadow)',
+      }}
+    >
+      <button
+        onClick={() => unhide(menuConvoId)}
+        className="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--txt2)] hover:bg-[var(--surface4)] hover:text-[var(--txt)] transition-colors">
+        <EyeOff className="w-3.5 h-3.5" />
+        Unhide conversation
+      </button>
+    </div>,
+    document.body,
+  ) : null;
+
+  return <>{mainPortal}{contextMenu}</>;
 }
