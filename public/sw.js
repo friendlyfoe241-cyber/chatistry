@@ -1,5 +1,5 @@
-// CHATistry Service Worker — handles background push notifications
-const CACHE = 'chatistry-v1';
+// Service Worker — handles background push notifications
+const CACHE = 'ialnotes-v1';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
@@ -8,11 +8,11 @@ self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', event => {
   const data = event.data?.json?.() ?? {};
   event.waitUntil(
-    self.registration.showNotification(data.title ?? 'CHATistry', {
+    self.registration.showNotification(data.title ?? 'New activity', {
       body: data.body ?? 'New message',
       icon: data.icon ?? '/logo.png',
       badge: '/logo.png',
-      tag: data.tag ?? 'chatistry-msg',
+      tag: data.tag ?? 'study-update',
       data: { url: data.url ?? '/' },
     })
   );
