@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://bionotes-ial.example.com/sitemap.xml
+Sitemap: https://chatistry.vercel.app/sitemap.xml

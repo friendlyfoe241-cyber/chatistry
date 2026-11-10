@@ -94,7 +94,7 @@ export function AuthScreen({ initialMode = 'signin', onBack }: { initialMode?: '
   };
 
   return (
-    <div className="liquid-shell min-h-full h-full flex items-center justify-center p-4 overflow-hidden relative">
+    <div className="liquid-shell min-h-screen flex items-center justify-center p-4 overflow-hidden relative">
       {onBack && (
         <button onClick={onBack}
           className="absolute top-5 left-5 flex items-center gap-1.5 text-sm text-[var(--txt3)] hover:text-[var(--txt2)] transition-colors z-10">

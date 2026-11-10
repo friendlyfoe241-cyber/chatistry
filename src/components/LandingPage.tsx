@@ -1,0 +1,44 @@
+import React, { useState } from 'react';
+import { motion } from 'motion/react';
+import { ArrowRight, Image, LockKeyhole, MessageCircleMore, Mic, Settings, UsersRound, Zap } from 'lucide-react';
+import { AppearanceMenu } from './AppearanceMenu';
+
+interface LandingPageProps { onSignIn: () => void; onSignUp: () => void; }
+const features = [
+  { icon: Zap, title: 'In the moment', copy: 'Live messages, presence, and typing that keep a conversation feeling alive.' },
+  { icon: LockKeyhole, title: 'Built with care', copy: 'Access is protected with Supabase row-level security from the start.' },
+  { icon: Image, title: 'More than text', copy: 'Share images, video, links, voice notes, and the small details too.' },
+  { icon: UsersRound, title: 'Your people', copy: 'Move between direct messages and groups without losing the thread.' },
+  { icon: MessageCircleMore, title: 'Keep context', copy: 'Reply, react, pin, edit, and forward when the moment calls for it.' },
+  { icon: Mic, title: 'Use your voice', copy: 'Record a note when a sentence is not enough.' },
+];
+
+export function LandingPage({ onSignIn, onSignUp }: LandingPageProps) {
+  const [showAppearance, setShowAppearance] = useState(false);
+  return <div className="liquid-shell min-h-screen overflow-hidden text-[var(--txt)]">
+    <nav className="landing-nav fixed top-0 inset-x-0 z-50 px-4 pt-4">
+      <div className="glass-panel max-w-6xl mx-auto rounded-2xl px-4 py-3 sm:h-16 sm:px-5 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <img src="/logo.png" alt="Chatistry" className="w-9 h-9 object-contain" />
+          <span className="text-lg font-extrabold tracking-[-.06em]">Chatistry</span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
+          <div className="relative shrink-0">
+            <button onClick={() => setShowAppearance(value => !value)} className="liquid-icon w-9 h-9 rounded-xl grid place-items-center text-[var(--accent)]" aria-label="Settings"><Settings className="w-4 h-4" /></button>
+            {showAppearance && <AppearanceMenu />}
+          </div>
+          <button onClick={onSignIn} className="px-3 py-1.5 sm:px-3.5 sm:py-2 text-sm font-semibold text-[var(--txt2)] hover:text-[var(--txt)] transition-colors whitespace-nowrap">Sign in</button>
+          <button onClick={onSignUp} className="liquid-button px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-sm font-bold whitespace-nowrap">Join Chatistry</button>
+        </div>
+      </div>
+    </nav>
+    <main>
+      <section className="relative max-w-6xl mx-auto px-6 pt-40 pb-24 lg:pt-48 lg:pb-36 grid lg:grid-cols-[1.08fr_.92fr] gap-14 items-center"><div className="absolute w-[32rem] h-[32rem] -top-28 -right-24 caustic-orb opacity-30 pointer-events-none" />
+        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .7, ease: [0.22,1,.36,1] }} className="relative"><div className="inline-flex items-center gap-2 rounded-full glass-panel px-3.5 py-2 text-[11px] font-bold uppercase tracking-[.13em] text-[var(--txt2)]"><span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_12px_var(--accent)]" /> A more human messenger</div><h1 className="mt-7 max-w-2xl text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-[-.075em] leading-[.98]">A calm place for<br /><span className="text-[var(--accent)]">real conversation.</span></h1><p className="mt-6 max-w-lg text-base sm:text-lg leading-8 text-[var(--txt2)]">Chatistry makes space for the people and messages that matter, with the immediacy of a live chat and the polish of something personal.</p><div className="mt-9 flex flex-wrap gap-3"><button onClick={onSignUp} className="liquid-button rounded-2xl px-6 py-3.5 text-sm font-extrabold flex items-center gap-2">Create your space <ArrowRight className="w-4 h-4" /></button><button onClick={onSignIn} className="glass-panel rounded-2xl px-6 py-3.5 text-sm font-bold hover:bg-[var(--surface3)] transition-colors">I already have an account</button></div><p className="mt-5 text-xs text-[var(--txt3)]">No ads. No clutter. Just your conversations.</p></motion.div>
+        <motion.div initial={{ opacity: 0, scale: .94, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: .85, delay: .1, ease: [0.22,1,.36,1] }} className="relative mx-auto w-full max-w-[440px]"><div className="caustic-orb w-[20rem] h-[20rem] -right-10 -top-12 opacity-60" /><div className="glass-panel-strong relative overflow-hidden rounded-[32px] p-4 shadow-[0_40px_110px_rgba(0,0,0,.28)]"><div className="flex items-center gap-3 border-b border-[var(--border)] px-2 pb-4"><div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-strong)] p-[1px]"><div className="w-full h-full rounded-[15px] bg-[var(--surface2)] grid place-items-center text-xs font-bold">M</div></div><div><div className="text-sm font-bold">Maya Chen</div><div className="text-[11px] text-[var(--accent)]">online now</div></div><div className="ml-auto flex gap-1.5"><span className="w-2 h-2 bg-white/30 rounded-full" /><span className="w-2 h-2 bg-white/30 rounded-full" /></div></div><div className="space-y-4 px-2 py-6"><div className="max-w-[74%] rounded-2xl rounded-tl-md bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] px-4 py-3 text-sm leading-6">I found the answer to the thing we were discussing.</div><div className="ml-auto max-w-[72%] rounded-2xl rounded-tr-md border border-[var(--bubble-me-border)] bg-[var(--bubble-me-bg)] px-4 py-3 text-sm leading-6">Send it across. I am ready.</div><div className="max-w-[64%] rounded-2xl rounded-tl-md bg-[var(--bubble-them-bg)] border border-[var(--bubble-them-border)] px-4 py-3 text-sm leading-6">It is beautifully simple.</div></div><div className="rounded-2xl border border-[var(--border)] bg-[var(--input-bg)] h-12 px-4 flex items-center"><span className="text-xs text-[var(--txt3)]">Write a message</span><span className="ml-auto w-7 h-7 rounded-full bg-[var(--accent)] grid place-items-center text-[#092027]">↑</span></div></div></motion.div>
+      </section>
+      <section className="max-w-6xl mx-auto px-6 py-20 border-t border-[var(--border)]"><div className="max-w-xl"><p className="text-xs font-bold uppercase tracking-[.17em] text-[var(--accent)]">Everything in its place</p><h2 className="mt-3 text-3xl sm:text-4xl font-extrabold tracking-[-.05em]">The pieces you use, refined.</h2></div><div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{features.map(({ icon: Icon, title, copy }, index) => <motion.article key={title} initial={{ opacity:0, y:12 }} whileInView={{ opacity:1,y:0 }} viewport={{ once:true }} transition={{ delay:index*.05 }} className="glass-panel rounded-[22px] p-6 hover:-translate-y-1 transition-transform"><div className="w-10 h-10 rounded-2xl bg-[var(--inset)] border border-[var(--border2)] grid place-items-center text-[var(--accent)]"><Icon className="w-4 h-4" /></div><h3 className="mt-5 font-bold tracking-[-.025em]">{title}</h3><p className="mt-2 text-sm leading-6 text-[var(--txt2)]">{copy}</p></motion.article>)}</div></section>
+      <section className="max-w-6xl mx-auto px-6 pb-24"><div className="glass-panel rounded-[32px] p-9 sm:p-12 text-center overflow-hidden relative"><div className="caustic-orb w-60 h-60 -left-20 -bottom-28 opacity-45" /><h2 className="relative text-3xl sm:text-4xl font-extrabold tracking-[-.06em]">Ready when you are.</h2><p className="relative mt-3 text-[var(--txt2)]">Build a more thoughtful group chat in under a minute.</p><button onClick={onSignUp} className="liquid-button relative mt-7 px-6 py-3.5 rounded-2xl text-sm font-extrabold">Get started</button></div></section>
+    </main><footer className="max-w-6xl mx-auto px-6 pb-8 flex justify-between text-xs text-[var(--txt3)]"><span>Chatistry</span><span>Made for conversations</span></footer>
+  </div>;
+}
